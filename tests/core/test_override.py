@@ -1,6 +1,6 @@
 """Tests for core.override (spec 4.6)."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -21,7 +21,7 @@ from custom_components.hearth.core.override import (
     standdown_until,
 )
 
-UTC = timezone.utc
+UTC = UTC
 T0 = datetime(2026, 1, 10, 18, 0, tzinfo=UTC)
 HL = timedelta(days=21)
 

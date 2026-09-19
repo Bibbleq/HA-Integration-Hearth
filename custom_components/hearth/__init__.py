@@ -7,9 +7,8 @@ from datetime import timedelta
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -116,6 +115,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     else:
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_started)
 
+    @callback
+    def _on_stop(_event) -> None:
+        forecast.async_stop()
+
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _on_stop)
+
     async_setup_services(hass)
     return True
 
@@ -151,6 +156,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             global_state.owner_entry_id = None
         if not hass.data[DOMAIN]["rooms"]:
             async_unload_services(hass)
+            hass.data[DOMAIN]["forecast"].async_stop()
     return ok
 
 

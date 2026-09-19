@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.helpers import selector
@@ -62,7 +61,10 @@ def _tier2_schema(current: dict[str, Any]) -> vol.Schema:
             ),
             vol.Required(CONF_AFFECTED_PRESETS, default=list(get(CONF_AFFECTED_PRESETS))): selector.SelectSelector(
                 selector.SelectSelectorConfig(
-                    options=list(AFFECTABLE_PRESETS), multiple=True, translation_key="affected_presets", mode=selector.SelectSelectorMode.LIST
+                    options=list(AFFECTABLE_PRESETS),
+                    multiple=True,
+                    translation_key="affected_presets",
+                    mode=selector.SelectSelectorMode.LIST,
                 )
             ),
             vol.Required(CONF_BOOST_BASE_TEMP, default=get(CONF_BOOST_BASE_TEMP)): selector.NumberSelector(

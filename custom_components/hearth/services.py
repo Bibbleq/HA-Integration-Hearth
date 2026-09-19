@@ -6,7 +6,6 @@ import logging
 from datetime import timedelta
 
 import voluptuous as vol
-
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv

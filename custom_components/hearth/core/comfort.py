@@ -6,9 +6,9 @@ and the adaptive comfort target derived from it.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-import math
 
 
 def clamp(value: float, lo: float, hi: float) -> float:

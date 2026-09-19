@@ -6,13 +6,14 @@ into here for a fetch; they read the cache a room hands them.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
 import logging
+from datetime import date, datetime, timedelta
 from typing import Any
 
-from homeassistant.components.weather import DOMAIN as WEATHER_DOMAIN, SERVICE_GET_FORECASTS
+from homeassistant.components.weather import DOMAIN as WEATHER_DOMAIN
+from homeassistant.components.weather import SERVICE_GET_FORECASTS
 from homeassistant.const import ATTR_ENTITY_ID
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -51,7 +52,9 @@ def normalise(hourly_raw: list[dict], daily_raw: list[dict], fetched_at: datetim
         day: date = dt_util.as_local(at).date()
         high = item.get("temperature")
         low = item.get("templow")
-        daily.append(DailyPoint(day, float(high) if high is not None else None, float(low) if low is not None else None, item.get("condition")))
+        daily.append(
+            DailyPoint(day, float(high) if high is not None else None, float(low) if low is not None else None, item.get("condition"))
+        )
     hourly.sort(key=lambda p: p.at)
     daily.sort(key=lambda p: p.day)
     return ForecastCache(fetched_at=fetched_at, hourly=hourly, daily=daily, source=source)
@@ -84,7 +87,9 @@ class ForecastManager:
     @callback
     def async_start(self) -> None:
         if self._unsub_interval is None:
-            self._unsub_interval = async_track_time_interval(self.hass, self._async_interval, self._refresh_interval)
+            self._unsub_interval = async_track_time_interval(
+                self.hass, self._async_interval, self._refresh_interval, cancel_on_shutdown=True
+            )
 
     @callback
     def async_stop(self) -> None:
@@ -93,8 +98,15 @@ class ForecastManager:
             self._unsub_interval = None
 
     @callback
-    def add_listener(self, listener) -> None:
+    def add_listener(self, listener) -> CALLBACK_TYPE:
         self._listeners.append(listener)
+
+        @callback
+        def _remove() -> None:
+            if listener in self._listeners:
+                self._listeners.remove(listener)
+
+        return _remove
 
     def cache(self, weather_entity_id: str | None) -> ForecastCache:
         if not weather_entity_id:

@@ -124,7 +124,9 @@ def room_store_key() -> str:
     return "hearth.room.climate_living_room"
 
 
-def seed_store(hass_storage: dict, *, t_rm: float, seeded_days_ago: float = 3, settings: dict | None = None, extra: dict | None = None) -> None:
+def seed_store(
+    hass_storage: dict, *, t_rm: float, seeded_days_ago: float = 3, settings: dict | None = None, extra: dict | None = None
+) -> None:
     """Pre-populate the room store so the 48 h seed hold is already over."""
     seeded_at = (dt_util.utcnow() - timedelta(days=seeded_days_ago)).isoformat()
     hass_storage[room_store_key()] = {

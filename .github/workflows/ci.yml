@@ -32,8 +32,13 @@ jobs:
   hacs:
     name: HACS validation
     runs-on: ubuntu-latest
+    # The HACS action downloads manifest.json and hacs.json anonymously from
+    # raw.githubusercontent.com, which fails while this repository is private.
+    # Advisory until the repo goes public; then drop continue-on-error.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: hacs/action@main
         with:
           category: integration
+          ignore: brands

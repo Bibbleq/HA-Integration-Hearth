@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
 import logging
+from datetime import date, datetime, timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -45,9 +45,7 @@ async def _from_history(hass: HomeAssistant, entity_id: str, start: datetime, en
     try:
         from homeassistant.components.recorder import get_instance, history
 
-        states = await get_instance(hass).async_add_executor_job(
-            history.state_changes_during_period, hass, start, end, entity_id
-        )
+        states = await get_instance(hass).async_add_executor_job(history.state_changes_during_period, hass, start, end, entity_id)
     except Exception as err:  # noqa: BLE001
         _LOGGER.debug("History seed unavailable for %s: %s", entity_id, err)
         return []

@@ -7,8 +7,8 @@ VTherm when the desired value has changed since the last write Hearth made.
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
 import logging
+from datetime import datetime, time, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -22,16 +22,20 @@ from homeassistant.helpers.event import (
     async_track_time_interval,
 )
 from homeassistant.helpers.storage import Store
-from homeassistant.util import dt as dt_util, slugify
+from homeassistant.util import dt as dt_util
+from homeassistant.util import slugify
 
 from .const import (
     CONF_AFFECTED_PRESETS,
     CONF_BAND_MAX,
     CONF_BAND_MIN,
     CONF_BASE_TEMP,
+    CONF_BEDTIME_DECISION_TIME,
     CONF_BOOST_BASE_TEMP,
     CONF_OUTDOOR_SENSOR,
     CONF_ROOM_NAME,
+    CONF_SKIP_DECISION_TIME,
+    CONF_SKIP_END_TIME,
     CONF_VTHERM,
     CONF_WEATHER,
     DEFAULT_COLD_MORNING_THRESHOLD,
@@ -59,6 +63,8 @@ from .const import (
 )
 from .core.comfort import ComfortResult, RunningMeanState, RunningMeanTracker, comfort_target, seed_running_mean
 from .core.override import WriteLog
+from .mech_setback import SetbackMixin
+from .mech_skip import SkipMixin
 from .seed import async_daily_means
 from .vtherm import ClampViolation, VThermAdapter, VThermSnapshot
 
@@ -83,7 +89,7 @@ def parse_hhmm(value: str, fallback: str) -> time:
     return time(0, 0)
 
 
-class HearthRoom:
+class HearthRoom(SkipMixin, SetbackMixin):
     """Controller for one VTherm."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -113,6 +119,8 @@ class HearthRoom:
         self.last_evaluated: datetime | None = None
         self.last_write: dict[str, Any] | None = None
         self.preset_entities_ok = True
+        self.last_external_change_at: datetime | None = None
+        self.last_external_change: dict[str, Any] | None = None
         self._outdoor_frozen_reported = False
         self._missing_presets_reported = False
 
@@ -180,14 +188,46 @@ class HearthRoom:
         if outdoor := self.option(CONF_OUTDOOR_SENSOR):
             self._unsubs.append(async_track_state_change_event(self.hass, [outdoor], self._on_outdoor_event))
         poll = timedelta(minutes=float(self.const("poll_interval_min")))
-        self._unsubs.append(async_track_time_interval(self.hass, self._on_tick, poll))
+        self._unsubs.append(async_track_time_interval(self.hass, self._on_tick, poll, cancel_on_shutdown=True))
         roll = parse_hhmm(self.const("daily_recompute_time"), "00:10")
-        self._unsubs.append(async_track_time_change(self.hass, self._on_tick, hour=roll.hour, minute=roll.minute, second=0))
+        self._unsubs.append(self._track_time(self._on_tick, roll.hour, roll.minute, 0))
         self._register_time_triggers()
         await self.async_evaluate("setup")
 
     def _register_time_triggers(self) -> None:
-        """Later phases register exact-time triggers here (decision times)."""
+        """Exact-time triggers for decision times, plus forecast prefetch 15 min before each."""
+        lead = timedelta(minutes=float(self.const("forecast_prefetch_lead_min")))
+        decision_times = [
+            parse_hhmm(self.option(CONF_SKIP_DECISION_TIME), TIER2_DEFAULTS[CONF_SKIP_DECISION_TIME]),
+            parse_hhmm(self.option(CONF_BEDTIME_DECISION_TIME), TIER2_DEFAULTS[CONF_BEDTIME_DECISION_TIME]),
+        ]
+        other_times = [
+            parse_hhmm(self.option(CONF_SKIP_END_TIME), TIER2_DEFAULTS[CONF_SKIP_END_TIME]),
+            parse_hhmm(self.const("skip_recheck_time"), "11:00"),
+            parse_hhmm(self.const("setback_restore_time"), "09:00"),
+            parse_hhmm(self.const("skip_preview_time"), "21:00"),
+        ]
+        for t in decision_times + other_times:
+            self._unsubs.append(async_track_time_change(self.hass, self._on_tick, hour=t.hour, minute=t.minute, second=5))
+        for t in decision_times:
+            prefetch = (datetime.combine(datetime(2000, 1, 1), t) - lead).time()
+            self._unsubs.append(async_track_time_change(self.hass, self._on_prefetch, hour=prefetch.hour, minute=prefetch.minute, second=0))
+        self.hass.data[DOMAIN]["forecast"].add_listener(self._on_forecast_update)
+
+    def _track_time(self, action, hour: int, minute: int, second: int) -> CALLBACK_TYPE:
+        return async_track_time_change(self.hass, action, hour=hour, minute=minute, second=second)
+
+    @callback
+    def _on_prefetch(self, _now) -> None:
+        self.hass.async_create_task(self._async_prefetch())
+
+    async def _async_prefetch(self) -> None:
+        await self.hass.data[DOMAIN]["forecast"].async_refresh(self.weather_entity_id)
+        await self.async_evaluate("prefetch")
+
+    @callback
+    def _on_forecast_update(self) -> None:
+        self.hass.async_create_task(self.async_evaluate("forecast"))
 
     async def async_unload(self) -> None:
         for unsub in self._unsubs:
@@ -208,6 +248,8 @@ class HearthRoom:
         self.last_outdoor_seen_at = _dt(data.get("last_outdoor_seen_at"))
         self.last_outdoor = data.get("last_outdoor")
         self.mechanisms = dict(data.get("mechanisms", {}))
+        self.last_external_change_at = _dt(data.get("last_external_change_at"))
+        self.last_external_change = data.get("last_external_change")
         self._load_mechanisms()
 
     def _load_mechanisms(self) -> None:
@@ -227,6 +269,8 @@ class HearthRoom:
             "last_outdoor_seen_at": _iso(self.last_outdoor_seen_at),
             "last_outdoor": self.last_outdoor,
             "mechanisms": self._dump_mechanisms(),
+            "last_external_change_at": _iso(self.last_external_change_at),
+            "last_external_change": self.last_external_change,
         }
 
     def _schedule_save(self) -> None:
@@ -321,7 +365,23 @@ class HearthRoom:
         self.hass.async_create_task(self.async_evaluate("vtherm"))
 
     def _on_vtherm_change(self, old, new) -> None:
-        """Later phases inspect VTherm transitions here (override detection)."""
+        """Note preset changes Hearth did not make. Phase 4 turns these into overrides."""
+        if old is None or new is None:
+            return
+        old_preset = old.attributes.get("preset_mode")
+        new_preset = new.attributes.get("preset_mode")
+        if old_preset == new_preset or new_preset is None:
+            return
+        now = dt_util.utcnow()
+        window = timedelta(seconds=float(self.const("write_match_window_s")))
+        if self.write_log.made_by_us(self.vtherm.entity_id, new_preset, now, window):
+            return
+        self.last_external_change_at = now
+        self.last_external_change = {"kind": "preset", "from": old_preset, "to": new_preset, "at": now.isoformat()}
+        self._on_external_change(old, new, old_preset, new_preset, now)
+
+    def _on_external_change(self, old, new, old_preset, new_preset, now: datetime) -> None:
+        """Phase 4 hook."""
 
     # ------------------------------------------------------------- evaluate
 
@@ -352,7 +412,8 @@ class HearthRoom:
         async_dispatcher_send(self.hass, SIGNAL_ROOM_UPDATE, self.entry_id)
 
     async def _evaluate_mechanisms(self, now: datetime, reason: str) -> None:
-        """Later phases run their mechanisms here, in order."""
+        await self._evaluate_skip(now)
+        await self._evaluate_setback(now)
 
     def _update_dormant(self) -> None:
         if not self.global_active:
@@ -404,17 +465,21 @@ class HearthRoom:
             return
         for preset in self.affected_presets:
             base = float(self.option(CONF_BASE_TEMP)) if preset == PRESET_COMFORT else float(self.option(CONF_BOOST_BASE_TEMP))
-            result = self.comfort if preset == PRESET_COMFORT else comfort_target(
-                base,
-                self.number(NUMBER_SLOPE),
-                self.running_mean.t_rm,
-                float(self.const("t_ref")),
-                lo,
-                hi,
-                self.number(NUMBER_MAX_OFFSET),
-                float(self.const("quantise_step")),
-                hold=hold,
-                extra_offset=self.learned_target_offset(),
+            result = (
+                self.comfort
+                if preset == PRESET_COMFORT
+                else comfort_target(
+                    base,
+                    self.number(NUMBER_SLOPE),
+                    self.running_mean.t_rm,
+                    float(self.const("t_ref")),
+                    lo,
+                    hi,
+                    self.number(NUMBER_MAX_OFFSET),
+                    float(self.const("quantise_step")),
+                    hold=hold,
+                    extra_offset=self.learned_target_offset(),
+                )
             )
             await self._maybe_write_preset_temp(preset, result.quantised, lo, hi, now, force_write)
 
@@ -497,6 +562,8 @@ class HearthRoom:
             "last_write": self.last_write,
             "write_log": self.write_log.to_list()[-20:],
             "mechanisms": self._dump_mechanisms(),
+            "last_external_change": self.last_external_change,
+            "forecast_fresh": self.forecast_fresh(dt_util.utcnow()),
         }
 
 

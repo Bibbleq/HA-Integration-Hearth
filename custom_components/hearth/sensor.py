@@ -12,6 +12,7 @@ from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .entity import HearthEntity
@@ -90,8 +91,93 @@ PHASE1_SENSORS: tuple[HearthSensorDescription, ...] = (
 )
 
 
+def _skip_status_attrs(room: HearthRoom) -> dict[str, Any]:
+    skip = room.skip
+    cache = room.forecast_cache()
+    return {
+        "reason": skip.get("aborted_reason") or skip.get("end_reason") or skip.get("reason") or skip.get("pending_reason"),
+        "decided_date": skip.get("decided_date"),
+        "decided_at": skip.get("decided_at"),
+        "threshold": skip.get("threshold"),
+        "forecast_high": skip.get("forecast_high"),
+        "condition": skip.get("condition"),
+        "previous_preset": skip.get("previous_preset"),
+        "started_at": skip.get("started_at"),
+        "ends_at": skip.get("ends_at"),
+        "ended_at": skip.get("ended_at"),
+        "indoor_at_start": skip.get("indoor_at_start"),
+        "skip_enabled": room.enabled("skip"),
+        "effective_threshold": room.effective_skip_threshold(),
+        "forecast_fresh": room.forecast_fresh(dt_util.utcnow()),
+        "forecast_fetched_at": cache.fetched_at.isoformat() if cache.fetched_at else None,
+        "weather_entity": room.weather_entity_id,
+    }
+
+
+def _skip_preview_attrs(room: HearthRoom) -> dict[str, Any]:
+    return dict(room.preview)
+
+
+def _setback_attrs(room: HearthRoom) -> dict[str, Any]:
+    sb = room.setback
+    due = room.setback_restore_due_at
+    return {
+        "reason": sb.get("reason") or sb.get("pending_reason"),
+        "decided_date": sb.get("decided_date"),
+        "decided_at": sb.get("decided_at"),
+        "coldest_morning_forecast": sb.get("coldest"),
+        "cold_morning_threshold": room.number("cold_morning_threshold"),
+        "eco_base": sb.get("eco_base"),
+        "eco_target": sb.get("eco_target"),
+        "applied_at": sb.get("applied_at"),
+        "restore_due_at": due.isoformat() if due else None,
+        "restored_at": sb.get("restored_at"),
+        "restore_reason": sb.get("restore_reason"),
+        "setback_enabled": room.enabled("setback"),
+        "vtherm_eco_temp": room.vtherm.preset_temp("eco"),
+    }
+
+
+def _preview_state(room: HearthRoom) -> str:
+    likely = room.preview.get("likely")
+    if likely is None:
+        return "unknown"
+    return "likely" if likely else "unlikely"
+
+
+PHASE2_SENSORS: tuple[HearthSensorDescription, ...] = (
+    HearthSensorDescription(
+        key="skip_status",
+        translation_key="skip_status",
+        device_class=SensorDeviceClass.ENUM,
+        options=["idle", "preview", "active", "aborted"],
+        icon="mdi:weather-sunny",
+        value_fn=lambda r: r.skip_status,
+        attrs_fn=_skip_status_attrs,
+    ),
+    HearthSensorDescription(
+        key="skip_preview",
+        translation_key="skip_preview",
+        device_class=SensorDeviceClass.ENUM,
+        options=["likely", "unlikely", "unknown"],
+        icon="mdi:crystal-ball",
+        value_fn=_preview_state,
+        attrs_fn=_skip_preview_attrs,
+    ),
+    HearthSensorDescription(
+        key="setback_status",
+        translation_key="setback_status",
+        device_class=SensorDeviceClass.ENUM,
+        options=["idle", "active"],
+        icon="mdi:weather-night",
+        value_fn=lambda r: r.setback_status,
+        attrs_fn=_setback_attrs,
+    ),
+)
+
+
 def all_descriptions() -> tuple[HearthSensorDescription, ...]:
-    return PHASE1_SENSORS
+    return PHASE1_SENSORS + PHASE2_SENSORS
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:

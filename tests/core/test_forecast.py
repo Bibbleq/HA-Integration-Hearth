@@ -1,6 +1,6 @@
 """Tests for core.forecast (spec 4.2, 4.3, 4.7)."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -15,7 +15,7 @@ from custom_components.hearth.core.forecast import (
     skip_threshold,
 )
 
-UTC = timezone.utc
+UTC = UTC
 T0 = datetime(2026, 1, 10, 0, 0, tzinfo=UTC)
 
 
@@ -171,24 +171,49 @@ def test_skip_abort_forecast_shortfall_needs_all_three():
 
 
 def test_decide_setback():
-    d = decide_setback(forecast_fresh=True, coldest_morning=-1.0, cold_morning_threshold=2.0, eco_base=15.0, setback_reduction=1.0, ceiling=22.0)
+    d = decide_setback(
+        forecast_fresh=True, coldest_morning=-1.0, cold_morning_threshold=2.0, eco_base=15.0, setback_reduction=1.0, ceiling=22.0
+    )
     assert d.reduce and d.eco_target == 16.0 and d.reason == "cold_morning"
-    d = decide_setback(forecast_fresh=True, coldest_morning=3.0, cold_morning_threshold=2.0, eco_base=15.0, setback_reduction=1.0, ceiling=22.0)
+    d = decide_setback(
+        forecast_fresh=True, coldest_morning=3.0, cold_morning_threshold=2.0, eco_base=15.0, setback_reduction=1.0, ceiling=22.0
+    )
     assert not d.reduce and d.reason == "morning_mild"
-    assert decide_setback(forecast_fresh=False, coldest_morning=-1.0, cold_morning_threshold=2.0, eco_base=15.0, setback_reduction=1.0, ceiling=22.0).reason == "forecast_stale"
-    assert decide_setback(forecast_fresh=True, coldest_morning=None, cold_morning_threshold=2.0, eco_base=15.0, setback_reduction=1.0, ceiling=22.0).reason == "no_morning_forecast"
-    assert decide_setback(forecast_fresh=True, coldest_morning=-1.0, cold_morning_threshold=2.0, eco_base=None, setback_reduction=1.0, ceiling=22.0).reason == "no_eco_base"
+    assert (
+        decide_setback(
+            forecast_fresh=False, coldest_morning=-1.0, cold_morning_threshold=2.0, eco_base=15.0, setback_reduction=1.0, ceiling=22.0
+        ).reason
+        == "forecast_stale"
+    )
+    assert (
+        decide_setback(
+            forecast_fresh=True, coldest_morning=None, cold_morning_threshold=2.0, eco_base=15.0, setback_reduction=1.0, ceiling=22.0
+        ).reason
+        == "no_morning_forecast"
+    )
+    assert (
+        decide_setback(
+            forecast_fresh=True, coldest_morning=-1.0, cold_morning_threshold=2.0, eco_base=None, setback_reduction=1.0, ceiling=22.0
+        ).reason
+        == "no_eco_base"
+    )
 
 
 def test_decide_setback_ceiling_is_hard():
-    d = decide_setback(forecast_fresh=True, coldest_morning=-1.0, cold_morning_threshold=2.0, eco_base=21.5, setback_reduction=1.0, ceiling=22.0)
+    d = decide_setback(
+        forecast_fresh=True, coldest_morning=-1.0, cold_morning_threshold=2.0, eco_base=21.5, setback_reduction=1.0, ceiling=22.0
+    )
     assert d.reduce and d.eco_target == 22.0
-    d = decide_setback(forecast_fresh=True, coldest_morning=-1.0, cold_morning_threshold=2.0, eco_base=22.0, setback_reduction=1.0, ceiling=22.0)
+    d = decide_setback(
+        forecast_fresh=True, coldest_morning=-1.0, cold_morning_threshold=2.0, eco_base=22.0, setback_reduction=1.0, ceiling=22.0
+    )
     assert not d.reduce and d.reason == "no_headroom"
 
 
 @pytest.mark.parametrize("eco_base", [10.0, 15.0, 21.9, 22.0, 25.0])
 def test_decide_setback_never_above_ceiling(eco_base):
-    d = decide_setback(forecast_fresh=True, coldest_morning=-5.0, cold_morning_threshold=2.0, eco_base=eco_base, setback_reduction=1.0, ceiling=22.0)
+    d = decide_setback(
+        forecast_fresh=True, coldest_morning=-5.0, cold_morning_threshold=2.0, eco_base=eco_base, setback_reduction=1.0, ceiling=22.0
+    )
     if d.reduce:
         assert d.eco_target <= 22.0

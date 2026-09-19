@@ -137,3 +137,33 @@ Corrections need 3+ decayed same-direction events and a mean pointing the same w
 
 Home Assistant 2026.9.3 requires Python 3.14.2; CI uses `actions/setup-python` 3.14 with
 `pytest-homeassistant-custom-component==0.13.366`. Core tests are Python 3.11+ and run without HA.
+
+## D18. HACS validation is advisory while the repo is private
+
+`hacs/action` fetches `manifest.json` and `hacs.json` anonymously from raw.githubusercontent.com, which
+returns nothing for a private repository, so its manifest checks can never pass until the repo is public.
+The job runs with `continue-on-error: true` and `ignore: brands`; drop both once the repo is public, and add
+GitHub topics (`home-assistant`, `hacs`, `versatile-thermostat`) which the action also requires.
+
+## D19. Licence and brand assets
+
+MIT licence added (the spec did not name one; the HACS licence check needs a file). Simple generated brand
+PNGs live in `custom_components/hearth/brand/` so HACS can show an icon without a brands-repo submission.
+
+## D20. Skip preview is continuous
+
+Rather than a single 21:00 computation, the preview is recomputed on every tick from the current cache: for
+today until the decision time, then for tomorrow. The spec's "computed the prior evening, re-confirmed at
+decision time" is a subset of that. Before the decision time, when today's forecast looks warm and the skip
+switch is on, `skip_status` reads `preview`.
+
+## D21. Setback restore rule
+
+The eco preset is restored at `setback_restore_time` (09:00 next day). If the eco number no longer shows the
+value Hearth wrote (someone edited it overnight) Hearth leaves it alone and records `left_as_is`.
+
+## D22. Manual intervention during a skip
+
+A preset change that Hearth's write log did not produce (within `write_match_window_s`) ends the skip with
+`manual_intervention` and no restore. Every other abort restores the previous preset. Phase 4 builds
+override detection on the same signal.

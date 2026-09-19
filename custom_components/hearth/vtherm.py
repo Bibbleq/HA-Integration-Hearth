@@ -8,18 +8,21 @@ write passes through `write_preset_temp`, which applies the hard clamp.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.climate import (
     ATTR_PRESET_MODE,
-    DOMAIN as CLIMATE_DOMAIN,
     SERVICE_SET_PRESET_MODE,
     HVACAction,
     HVACMode,
 )
-from homeassistant.components.number import ATTR_VALUE, DOMAIN as NUMBER_DOMAIN, SERVICE_SET_VALUE
+from homeassistant.components.climate import (
+    DOMAIN as CLIMATE_DOMAIN,
+)
+from homeassistant.components.number import ATTR_VALUE, SERVICE_SET_VALUE
+from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
 from homeassistant.const import ATTR_ENTITY_ID, STATE_NOT_HOME, STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import entity_registry as er

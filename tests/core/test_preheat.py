@@ -1,12 +1,12 @@
 """Tests for core.preheat (spec 4.4)."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from custom_components.hearth.core.preheat import HeatingRun, WarmingModel, fit, lead_minutes, preheat_start, warming_rate
 
-UTC = timezone.utc
+UTC = UTC
 T0 = datetime(2026, 1, 10, 5, 0, tzinfo=UTC)
 
 

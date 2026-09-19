@@ -137,9 +137,7 @@ async def test_mechanism_switch_off_stops_writes(hass: HomeAssistant, hass_stora
     assert services["set_value"] == []
     # Sensor still computes
     assert hass.states.get("sensor.hearth_living_room_comfort_target").attributes["quantised"] == 21.0
-    await hass.services.async_call(
-        "switch", "turn_on", {"entity_id": "switch.hearth_living_room_adaptive_comfort"}, blocking=True
-    )
+    await hass.services.async_call("switch", "turn_on", {"entity_id": "switch.hearth_living_room_adaptive_comfort"}, blocking=True)
     await hass.async_block_till_done()
     assert len(services["set_value"]) == 1
     assert room.switch("adaptive")

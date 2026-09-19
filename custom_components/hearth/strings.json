@@ -100,43 +100,105 @@
   },
   "entity": {
     "switch": {
-      "active": { "name": "Active" },
-      "adaptive": { "name": "Adaptive comfort" },
-      "skip": { "name": "Forecast skip" },
-      "setback": { "name": "Setback depth" },
-      "schedule": { "name": "Schedule" },
-      "preheat": { "name": "Preheat" },
-      "learning": { "name": "Override learning" },
-      "apply_learning": { "name": "Apply learned corrections" }
+      "active": {
+        "name": "Active"
+      },
+      "adaptive": {
+        "name": "Adaptive comfort"
+      },
+      "skip": {
+        "name": "Forecast skip"
+      },
+      "setback": {
+        "name": "Setback depth"
+      },
+      "schedule": {
+        "name": "Schedule"
+      },
+      "preheat": {
+        "name": "Preheat"
+      },
+      "learning": {
+        "name": "Override learning"
+      },
+      "apply_learning": {
+        "name": "Apply learned corrections"
+      }
     },
     "number": {
-      "adaptive_slope": { "name": "Adaptive slope" },
-      "skip_threshold": { "name": "Skip threshold" },
-      "max_offset": { "name": "Max offset" },
-      "min_indoor_floor": { "name": "Min indoor floor" },
-      "cold_morning_threshold": { "name": "Cold morning threshold" }
+      "adaptive_slope": {
+        "name": "Adaptive slope"
+      },
+      "skip_threshold": {
+        "name": "Skip threshold"
+      },
+      "max_offset": {
+        "name": "Max offset"
+      },
+      "min_indoor_floor": {
+        "name": "Min indoor floor"
+      },
+      "cold_morning_threshold": {
+        "name": "Cold morning threshold"
+      }
     },
     "sensor": {
-      "running_mean_outdoor": { "name": "Running mean outdoor" },
-      "comfort_target": { "name": "Comfort target" },
+      "running_mean_outdoor": {
+        "name": "Running mean outdoor"
+      },
+      "comfort_target": {
+        "name": "Comfort target"
+      },
       "skip_status": {
         "name": "Skip status",
-        "state": { "idle": "Idle", "preview": "Preview", "active": "Active", "aborted": "Aborted" }
+        "state": {
+          "idle": "Idle",
+          "preview": "Preview",
+          "active": "Active",
+          "aborted": "Aborted"
+        }
       },
       "skip_preview": {
         "name": "Skip preview",
-        "state": { "likely": "Likely", "unlikely": "Unlikely", "unknown": "Unknown" }
+        "state": {
+          "likely": "Likely",
+          "unlikely": "Unlikely",
+          "unknown": "Unknown"
+        }
       },
-      "warming_rate": { "name": "Warming rate" },
-      "next_block": { "name": "Next block" },
-      "standdown": { "name": "Stand-down" },
-      "learning_preheat_shortfall": { "name": "Learning preheat shortfall" },
-      "learning_slope_error": { "name": "Learning slope error" },
-      "learning_skip_failure": { "name": "Learning skip failure" },
-      "learning_baseline_error": { "name": "Learning baseline error" }
+      "warming_rate": {
+        "name": "Warming rate"
+      },
+      "next_block": {
+        "name": "Next block"
+      },
+      "standdown": {
+        "name": "Stand-down"
+      },
+      "learning_preheat_shortfall": {
+        "name": "Learning preheat shortfall"
+      },
+      "learning_slope_error": {
+        "name": "Learning slope error"
+      },
+      "learning_skip_failure": {
+        "name": "Learning skip failure"
+      },
+      "learning_baseline_error": {
+        "name": "Learning baseline error"
+      },
+      "setback_status": {
+        "name": "Setback status",
+        "state": {
+          "idle": "Idle",
+          "active": "Active"
+        }
+      }
     },
     "binary_sensor": {
-      "dormant": { "name": "Dormant" }
+      "dormant": {
+        "name": "Dormant"
+      }
     }
   },
   "services": {
@@ -144,44 +206,86 @@
       "name": "Override",
       "description": "Stand Hearth down for a room so it heats normally for a while.",
       "fields": {
-        "entry_id": { "name": "Room", "description": "The Hearth room (config entry)." },
-        "vtherm_entity_id": { "name": "VTherm", "description": "Alternatively, the VTherm climate entity the room drives." },
-        "duration": { "name": "Duration", "description": "How long to stand down. Defaults to the stand-down timeout." }
+        "entry_id": {
+          "name": "Room",
+          "description": "The Hearth room (config entry)."
+        },
+        "vtherm_entity_id": {
+          "name": "VTherm",
+          "description": "Alternatively, the VTherm climate entity the room drives."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "How long to stand down. Defaults to the stand-down timeout."
+        }
       }
     },
     "recompute": {
       "name": "Recompute",
       "description": "Force an adaptive recompute and write for one room or all rooms.",
       "fields": {
-        "entry_id": { "name": "Room", "description": "The Hearth room (config entry). Leave empty for all rooms." },
-        "vtherm_entity_id": { "name": "VTherm", "description": "Alternatively, the VTherm climate entity the room drives." },
-        "force": { "name": "Force write", "description": "Write the computed preset temperature even if it has not changed." }
+        "entry_id": {
+          "name": "Room",
+          "description": "The Hearth room (config entry). Leave empty for all rooms."
+        },
+        "vtherm_entity_id": {
+          "name": "VTherm",
+          "description": "Alternatively, the VTherm climate entity the room drives."
+        },
+        "force": {
+          "name": "Force write",
+          "description": "Write the computed preset temperature even if it has not changed."
+        }
       }
     },
     "refresh_forecast": {
       "name": "Refresh forecast",
       "description": "Fetch the forecast now.",
       "fields": {
-        "entry_id": { "name": "Room", "description": "Limit to one room's weather entity. Leave empty for all." },
-        "vtherm_entity_id": { "name": "VTherm", "description": "Alternatively, the VTherm climate entity the room drives." }
+        "entry_id": {
+          "name": "Room",
+          "description": "Limit to one room's weather entity. Leave empty for all."
+        },
+        "vtherm_entity_id": {
+          "name": "VTherm",
+          "description": "Alternatively, the VTherm climate entity the room drives."
+        }
       }
     },
     "set_schedule": {
       "name": "Set schedule",
       "description": "Replace a room's warm-by schedule.",
       "fields": {
-        "entry_id": { "name": "Room", "description": "The Hearth room (config entry)." },
-        "vtherm_entity_id": { "name": "VTherm", "description": "Alternatively, the VTherm climate entity the room drives." },
-        "schedule": { "name": "Schedule", "description": "Weekday to block list, e.g. mon: [{warm_by: '06:30', preset: comfort, skippable: true}, {at: '22:30', preset: eco}]." }
+        "entry_id": {
+          "name": "Room",
+          "description": "The Hearth room (config entry)."
+        },
+        "vtherm_entity_id": {
+          "name": "VTherm",
+          "description": "Alternatively, the VTherm climate entity the room drives."
+        },
+        "schedule": {
+          "name": "Schedule",
+          "description": "Weekday to block list, e.g. mon: [{warm_by: '06:30', preset: comfort, skippable: true}, {at: '22:30', preset: eco}]."
+        }
       }
     },
     "reset_learning": {
       "name": "Reset learning",
       "description": "Clear the override ledger for a room, or one attribution bucket.",
       "fields": {
-        "entry_id": { "name": "Room", "description": "The Hearth room (config entry)." },
-        "vtherm_entity_id": { "name": "VTherm", "description": "Alternatively, the VTherm climate entity the room drives." },
-        "bucket": { "name": "Bucket", "description": "Leave empty to reset every bucket." }
+        "entry_id": {
+          "name": "Room",
+          "description": "The Hearth room (config entry)."
+        },
+        "vtherm_entity_id": {
+          "name": "VTherm",
+          "description": "Alternatively, the VTherm climate entity the room drives."
+        },
+        "bucket": {
+          "name": "Bucket",
+          "description": "Leave empty to reset every bucket."
+        }
       }
     }
   }

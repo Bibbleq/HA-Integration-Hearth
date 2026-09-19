@@ -13,8 +13,13 @@ from typing import Any
 
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 WEEKDAY_ALIASES = {
-    "monday": "mon", "tuesday": "tue", "wednesday": "wed", "thursday": "thu",
-    "friday": "fri", "saturday": "sat", "sunday": "sun",
+    "monday": "mon",
+    "tuesday": "tue",
+    "wednesday": "wed",
+    "thursday": "thu",
+    "friday": "fri",
+    "saturday": "sat",
+    "sunday": "sun",
 }
 VALID_PRESETS = ("frost", "eco", "comfort", "boost")
 

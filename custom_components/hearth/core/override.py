@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-import math
 
 BUCKET_PREHEAT = "preheat_shortfall"
 BUCKET_SLOPE = "slope_error"
@@ -211,11 +211,11 @@ def qualifies(ctx: OverrideContext, *, new_preset: str | None = None) -> str | N
     return None
 
 
-def attribute(ctx: OverrideContext, direction: int, *, preheat_window_min: float = 60.0, skip_after_window_min: float = 120.0) -> tuple[str, float]:
+def attribute(
+    ctx: OverrideContext, direction: int, *, preheat_window_min: float = 60.0, skip_after_window_min: float = 120.0
+) -> tuple[str, float]:
     """Pick the attribution bucket and weight (spec 4.6)."""
-    if ctx.skip_state == "active" or (
-        ctx.skip_ended_minutes_ago is not None and ctx.skip_ended_minutes_ago <= skip_after_window_min
-    ):
+    if ctx.skip_state == "active" or (ctx.skip_ended_minutes_ago is not None and ctx.skip_ended_minutes_ago <= skip_after_window_min):
         if direction > 0:
             return BUCKET_SKIP, 2.0
     if direction > 0 and ctx.minutes_since_warm_by is not None and 0 <= ctx.minutes_since_warm_by <= preheat_window_min:
@@ -315,9 +315,7 @@ class Ledger:
     def add(self, entry: LedgerEntry, half_life: timedelta) -> None:
         self.entries.append(entry)
         del self.entries[: -self.max_entries]
-        self.buckets.setdefault(entry.bucket, BucketStats()).update(
-            entry.direction * entry.magnitude, entry.at, half_life, entry.weight
-        )
+        self.buckets.setdefault(entry.bucket, BucketStats()).update(entry.direction * entry.magnitude, entry.at, half_life, entry.weight)
 
     def reset(self, bucket: str | None = None) -> None:
         if bucket is None:
