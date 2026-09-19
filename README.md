@@ -92,11 +92,12 @@ Each room is a device named *Hearth \<Room\>*. Diagnostics (read-only):
 | `sensor.hearth_<room>_running_mean_outdoor` | T_rm in C, with today's partial mean, sample count and recent daily means |
 | `sensor.hearth_<room>_comfort_target` | Computed comfort target (pre-quantise) with the applied offset, quantised value and last write |
 | `sensor.hearth_<room>_skip_status` | idle / preview / active / aborted, with reason, threshold and forecast basis |
-| `sensor.hearth_<room>_skip_preview` | Tomorrow: likely / unlikely / unknown |
+| `sensor.hearth_<room>_skip_preview` | Today until the decision time, then tomorrow: likely / unlikely / unknown, with the forecast basis |
+| `sensor.hearth_<room>_setback_status` | idle / active, with the coldest-morning forecast, eco base and target, restore time |
 | `sensor.hearth_<room>_warming_rate` | C/h at the current outdoor temperature, with model constants and run count |
 | `sensor.hearth_<room>_next_block` | Phase 3: "comfort by 06:30, preheat est. 05:52" |
-| `sensor.hearth_<room>_stand_down` | none / until timestamp, with cause |
-| `sensor.hearth_<room>_learning_<bucket>` | Phase 4: bias in C with evidence count |
+| `sensor.hearth_<room>_stand_down` | none / until (local timestamp), with cause and the last external change |
+| `sensor.hearth_<room>_learning_<bucket>` | Phase 4: decayed mean bias in C per bucket (`preheat_shortfall`, `slope_error`, `skip_failure`, `baseline_error`) with evidence count and the correction that would apply |
 | `binary_sensor.hearth_<room>_dormant` | On when Hearth is leaving the room alone, with reason (away / frost / window / safety / overpowering / off / disabled / no_preset_entities) |
 
 Hearth also fires `hearth_diagnostic` events (seeding, outdoor sensor loss, refused writes) and provides a
@@ -106,7 +107,7 @@ config-entry diagnostics download.
 
 | Service | Fields | What it does |
 |---|---|---|
-| `hearth.override` | room, `duration` | Stand Hearth down deliberately ("heat normally for 3 h") |
+| `hearth.override` | room, `duration` | Stand Hearth down deliberately ("heat normally for 3 h"). Ends an active skip and restores the preset. Works whether or not override learning is on |
 | `hearth.recompute` | room (optional), `force` | Force an adaptive recompute and write |
 | `hearth.refresh_forecast` | room (optional) | Fetch the forecast now |
 | `hearth.set_schedule` | room, `schedule` | Replace a room's warm-by schedule (phase 3) |
@@ -128,9 +129,37 @@ Phases are meant to soak for a few weeks each. Everything is per room.
    `switch.hearth_<room>_schedule`, then disable that room's HA Scheduler entries. Once the preset
    switching looks right, turn on `switch.hearth_<room>_preheat`. The warming-rate model uses a
    conservative 1.0 C/h until it has five clean heating runs.
-4. **Override learning**: turn on `switch.hearth_<room>_override_learning`. The ledger records only;
-   the `learning_*` sensors show the biases it would apply. `apply_learned_corrections` is a second-winter
-   flag.
+4. **Override learning**: turn on `switch.hearth_<room>_override_learning`. From then on a manual preset
+   or temperature change stands Hearth down for that room (until the next schedule block or 180 min) and is
+   recorded in the ledger. The `learning_*` sensors show the biases and the correction each bucket would
+   apply. `apply_learned_corrections` is a second-winter flag: bounded corrections (+/- 1 C on targets,
+   +/- 25 % on the preheat safety factor) after three consistent events, always inside the band clamps.
+
+### Schedule format
+
+```yaml
+service: hearth.set_schedule
+data:
+  vtherm_entity_id: climate.living_room
+  schedule:
+    mon: &weekday
+      - { warm_by: "06:30", preset: comfort, skippable: true }
+      - { at: "09:00", preset: eco }
+      - { warm_by: "17:00", preset: comfort }
+      - { at: "22:30", preset: eco }
+    tue: *weekday
+    wed: *weekday
+    thu: *weekday
+    fri: *weekday
+    sat: &weekend
+      - { warm_by: "08:30", preset: comfort, skippable: true }
+      - { at: "22:00", preset: eco }
+    sun: *weekend
+```
+
+`warm_by` blocks get preheat; `at` blocks fire at the stated time. `skippable` marks blocks the forecast
+skip may suppress. Presets: `frost`, `eco`, `comfort`, `boost`. One year-round schedule per room; the
+adaptive offset, skip and preheat handle the seasons.
 
 ## Safety behaviour
 

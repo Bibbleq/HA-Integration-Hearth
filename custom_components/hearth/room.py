@@ -284,7 +284,8 @@ class HearthRoom(LearningMixin, ScheduleMixin, SkipMixin, SetbackMixin):
         }
 
     def _schedule_save(self) -> None:
-        self._store.async_delay_save(self._data_to_save, 5)
+        # VTherm entities are chatty; coalesce saves so the store is not rewritten on every attribute change.
+        self._store.async_delay_save(self._data_to_save, 30)
 
     # ------------------------------------------------------------- inputs
 
