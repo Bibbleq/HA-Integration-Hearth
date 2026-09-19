@@ -192,3 +192,27 @@ While a skip is active the schedule does not apply blocks. A non-skippable block
 starting after the skip began ends the skip (`non_skippable_block`) and applies. When a skip ends for any
 other reason with the schedule on, the restore target is the current block's preset rather than the preset
 captured at skip start.
+
+## D26. What counts as an override, and what stands the room down
+
+Stand-down and the ledger sit behind the `override_learning` switch (phase 4 is off until enabled); the
+`hearth.override` service stands a room down regardless. A change stands the room down when the room is in
+scope (not dormant) and either the preset it left is an affected preset or it switched into one. Storm and
+stale-forecast exclusions apply to the ledger only: the second change of an evening still stands the room
+down, it just is not recorded. Changes while dormant (window open, frost, away...) do neither.
+
+Three change kinds are detected from the climate entity's state: a preset switch Hearth did not make
+(`preset`), a preset switch to `none` with a target change (`setpoint`, VTherm's manual-temperature
+behaviour), and a target change within the same preset that does not match one of Hearth's own number
+writes (`temp`, a hand edit of the preset number).
+
+## D27. Ledger magnitude for preset switches
+
+A preset switch's magnitude is the difference between the two preset temperatures, which can be 5 C or more
+and would swamp a mean correction. Ledger magnitudes are capped at twice `learning_target_bound` (2.0 C);
+the raw value is kept in the stand-down sensor's `last_override` attribute.
+
+## D28. Detection judges the new state
+
+Override detection runs from the climate state-change listener before the controller re-evaluates, so it
+snapshots the *new* state for dormancy and preset context rather than the last evaluated snapshot.

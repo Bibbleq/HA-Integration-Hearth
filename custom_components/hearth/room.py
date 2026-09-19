@@ -13,7 +13,6 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
-from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import (
     EventStateChangedData,
@@ -63,6 +62,7 @@ from .const import (
 )
 from .core.comfort import ComfortResult, RunningMeanState, RunningMeanTracker, comfort_target, seed_running_mean
 from .core.override import WriteLog
+from .mech_learning import LearningMixin
 from .mech_schedule import ScheduleMixin
 from .mech_setback import SetbackMixin
 from .mech_skip import SkipMixin
@@ -90,7 +90,7 @@ def parse_hhmm(value: str, fallback: str) -> time:
     return time(0, 0)
 
 
-class HearthRoom(ScheduleMixin, SkipMixin, SetbackMixin):
+class HearthRoom(LearningMixin, ScheduleMixin, SkipMixin, SetbackMixin):
     """Controller for one VTherm.
 
     Mixin order matters: a later phase's mixin overrides the hooks of an earlier one.
@@ -128,6 +128,7 @@ class HearthRoom(ScheduleMixin, SkipMixin, SetbackMixin):
         self._outdoor_frozen_reported = False
         self._missing_presets_reported = False
         self._init_schedule()
+        self._init_learning()
 
     # ------------------------------------------------------------- config access
 
@@ -260,9 +261,11 @@ class HearthRoom(ScheduleMixin, SkipMixin, SetbackMixin):
 
     def _load_mechanisms(self) -> None:
         self._load_schedule_state()
+        self._load_learning_state()
 
     def _dump_mechanisms(self) -> dict:
         self._dump_schedule_state()
+        self._dump_learning_state()
         return dict(self.mechanisms)
 
     def _data_to_save(self) -> dict:
@@ -371,25 +374,6 @@ class HearthRoom(ScheduleMixin, SkipMixin, SetbackMixin):
         self._on_vtherm_change(old, new)
         self.hass.async_create_task(self.async_evaluate("vtherm"))
 
-    def _on_vtherm_change(self, old, new) -> None:
-        """Note preset changes Hearth did not make. Phase 4 turns these into overrides."""
-        if old is None or new is None:
-            return
-        old_preset = old.attributes.get("preset_mode")
-        new_preset = new.attributes.get("preset_mode")
-        if old_preset == new_preset or new_preset is None:
-            return
-        now = dt_util.utcnow()
-        window = timedelta(seconds=float(self.const("write_match_window_s")))
-        if self.write_log.made_by_us(self.vtherm.entity_id, new_preset, now, window):
-            return
-        self.last_external_change_at = now
-        self.last_external_change = {"kind": "preset", "from": old_preset, "to": new_preset, "at": now.isoformat()}
-        self._on_external_change(old, new, old_preset, new_preset, now)
-
-    def _on_external_change(self, old, new, old_preset, new_preset, now: datetime) -> None:
-        """Phase 4 hook."""
-
     # ------------------------------------------------------------- evaluate
 
     async def async_evaluate(self, reason: str = "manual", *, force_write: bool = False) -> None:
@@ -444,15 +428,6 @@ class HearthRoom(ScheduleMixin, SkipMixin, SetbackMixin):
     @property
     def dormant(self) -> bool:
         return self.dormant_reason is not None
-
-    @property
-    def standdown_active(self) -> bool:
-        """Phase 4 overrides this; until then Hearth never stands down."""
-        return False
-
-    def learned_target_offset(self) -> float:
-        """Phase 4 supplies the learned correction when application is enabled."""
-        return 0.0
 
     async def _evaluate_adaptive(self, now: datetime, force_write: bool) -> None:
         lo, hi = self.band
@@ -539,13 +514,6 @@ class HearthRoom(ScheduleMixin, SkipMixin, SetbackMixin):
 
     # ------------------------------------------------------------- services
 
-    async def async_service_override(self, minutes: float | None) -> None:
-        """hearth.override: stand down deliberately. Phase 4 implements the stand-down itself."""
-        raise ServiceValidationError("hearth.override needs the override mechanism (phase 4)")
-
-    async def async_service_reset_learning(self, bucket: str | None) -> None:
-        raise ServiceValidationError("hearth.reset_learning needs the learning mechanism (phase 4)")
-
     # ------------------------------------------------------------- diagnostics
 
     def _diagnostic(self, kind: str, message: str) -> None:
@@ -569,6 +537,8 @@ class HearthRoom(ScheduleMixin, SkipMixin, SetbackMixin):
             "mechanisms": self._dump_mechanisms(),
             "last_external_change": self.last_external_change,
             "forecast_fresh": self.forecast_fresh(dt_util.utcnow()),
+            "standdown": self.standdown.to_dict(),
+            "ledger": self.ledger.to_dict(),
         }
 
 

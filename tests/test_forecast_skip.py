@@ -222,6 +222,15 @@ async def test_skip_mid_morning_recheck_shortfall(hass: HomeAssistant, hass_stor
     room = await setup_room(hass, make_entry(options={"weather_entity_id": WEATHER}))
     await refresh_forecast(hass)
     assert room.skip["status"] == "active"
+    set_vtherm(hass, preset="eco", current=18.0, outdoor=12.0)  # VTherm reflects our write
+    await hass.async_block_till_done()
+    # 10:00: indoor falling but outdoor on forecast, and the re-check is not due yet
+    t = local(today, 10, 0)
+    freezer.move_to(t)
+    set_vtherm(hass, preset="eco", current=17.5, outdoor=11.0)
+    async_fire_time_changed(hass, t)
+    await hass.async_block_till_done()
+    assert room.skip["status"] == "active"
     # 11:05: indoor falling and outdoor 4 C under forecast -> abort
     t = local(today, 11, 5)
     freezer.move_to(t)

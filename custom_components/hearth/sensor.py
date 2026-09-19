@@ -265,8 +265,59 @@ PHASE3_SENSORS: tuple[HearthSensorDescription, ...] = (
 )
 
 
+def _standdown_state(room: HearthRoom) -> str:
+    if room.standdown_active:
+        return dt_util.as_local(room.standdown.until).isoformat()
+    return "none"
+
+
+def _standdown_attrs(room: HearthRoom) -> dict[str, Any]:
+    sd = room.standdown
+    active = room.standdown_active
+    return {
+        "active": active,
+        "cause": sd.cause if active else None,
+        "started_at": sd.started_at.isoformat() if active and sd.started_at else None,
+        "until": sd.until.isoformat() if active and sd.until else None,
+        "last_cause": sd.cause,
+        "last_external_change": room.last_external_change,
+        "learning_enabled": room.enabled("learning"),
+        "timeout_min": room.const("standdown_timeout_min"),
+        "recent_ignored_overrides": room.learning.get("ignored", [])[-5:],
+        "last_override": room.learning.get("last_override"),
+    }
+
+
+def _learning_sensor(bucket: str) -> HearthSensorDescription:
+    return HearthSensorDescription(
+        key=f"learning_{bucket}",
+        translation_key=f"learning_{bucket}",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        icon="mdi:school-outline",
+        value_fn=lambda r, b=bucket: round(r.ledger.buckets[b].mean, 3) if b in r.ledger.buckets else 0.0,
+        attrs_fn=lambda r, b=bucket: r.learning_summary(b),
+    )
+
+
+PHASE4_SENSORS: tuple[HearthSensorDescription, ...] = (
+    HearthSensorDescription(
+        key="standdown",
+        translation_key="standdown",
+        icon="mdi:hand-back-left",
+        value_fn=_standdown_state,
+        attrs_fn=_standdown_attrs,
+    ),
+    _learning_sensor("preheat_shortfall"),
+    _learning_sensor("slope_error"),
+    _learning_sensor("skip_failure"),
+    _learning_sensor("baseline_error"),
+)
+
+
 def all_descriptions() -> tuple[HearthSensorDescription, ...]:
-    return PHASE1_SENSORS + PHASE2_SENSORS + PHASE3_SENSORS
+    return PHASE1_SENSORS + PHASE2_SENSORS + PHASE3_SENSORS + PHASE4_SENSORS
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
