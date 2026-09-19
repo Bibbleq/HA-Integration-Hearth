@@ -1,0 +1,188 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Pick the Versatile Thermostat to drive",
+        "description": "One Hearth room per VTherm. Hearth writes only to the VTherm's preset temperature numbers and its preset, never raw setpoints.",
+        "data": {
+          "vtherm_entity_id": "Versatile Thermostat",
+          "room_name": "Room name"
+        },
+        "data_description": {
+          "vtherm_entity_id": "The VTherm climate entity for this room. It must expose its own preset temperature numbers (untick 'use central configuration' for preset temperatures).",
+          "room_name": "Optional. Defaults to the VTherm's name."
+        }
+      },
+      "settings": {
+        "title": "Room settings (Tier 2)",
+        "data": {
+          "weather_entity_id": "Weather entity",
+          "outdoor_sensor_entity_id": "Outdoor temperature sensor",
+          "base_comfort_temp": "Baseline comfort temperature",
+          "band_min": "Comfort band minimum",
+          "band_max": "Comfort band maximum",
+          "affected_presets": "Presets the adaptive offset applies to",
+          "base_boost_temp": "Baseline boost temperature",
+          "solar_gain": "Room has solar gain",
+          "skip_decision_time": "Skip decision time",
+          "skip_end_time": "Skip end time",
+          "bedtime_decision_time": "Bedtime decision time"
+        },
+        "data_description": {
+          "weather_entity_id": "Optional. Leave empty to share another room's weather entity or the first one in Home Assistant.",
+          "outdoor_sensor_entity_id": "Optional override. By default Hearth reads the VTherm's own outdoor temperature attribute.",
+          "base_comfort_temp": "The comfort target when the running-mean outdoor temperature equals the reference (10 C).",
+          "band_min": "Hard clamp. Hearth never writes a comfort target below this.",
+          "band_max": "Hard clamp. Hearth never writes a preset temperature above this.",
+          "affected_presets": "Comfort only is the v1 default.",
+          "base_boost_temp": "Only used when boost is an affected preset.",
+          "solar_gain": "Lowers the forecast-skip threshold on sunny days and trims the preheat target.",
+          "skip_decision_time": "When the morning forecast-skip decision is taken.",
+          "skip_end_time": "When an active skip ends and the schedule preset is restored.",
+          "bedtime_decision_time": "When the cold-morning setback decision is taken."
+        }
+      }
+    },
+    "error": {
+      "band_inverted": "The band minimum must not exceed the band maximum.",
+      "base_outside_band": "The baseline comfort temperature must sit inside the band.",
+      "no_presets": "Pick at least one preset."
+    },
+    "abort": {
+      "already_configured": "This VTherm already has a Hearth room."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Room settings (Tier 2)",
+        "data": {
+          "weather_entity_id": "Weather entity",
+          "outdoor_sensor_entity_id": "Outdoor temperature sensor",
+          "base_comfort_temp": "Baseline comfort temperature",
+          "band_min": "Comfort band minimum",
+          "band_max": "Comfort band maximum",
+          "affected_presets": "Presets the adaptive offset applies to",
+          "base_boost_temp": "Baseline boost temperature",
+          "solar_gain": "Room has solar gain",
+          "skip_decision_time": "Skip decision time",
+          "skip_end_time": "Skip end time",
+          "bedtime_decision_time": "Bedtime decision time"
+        },
+        "data_description": {
+          "weather_entity_id": "Optional. Leave empty to share another room's weather entity or the first one in Home Assistant.",
+          "outdoor_sensor_entity_id": "Optional override. By default Hearth reads the VTherm's own outdoor temperature attribute.",
+          "base_comfort_temp": "The comfort target when the running-mean outdoor temperature equals the reference (10 C).",
+          "band_min": "Hard clamp. Hearth never writes a comfort target below this.",
+          "band_max": "Hard clamp. Hearth never writes a preset temperature above this.",
+          "affected_presets": "Comfort only is the v1 default.",
+          "base_boost_temp": "Only used when boost is an affected preset.",
+          "solar_gain": "Lowers the forecast-skip threshold on sunny days and trims the preheat target.",
+          "skip_decision_time": "When the morning forecast-skip decision is taken.",
+          "skip_end_time": "When an active skip ends and the schedule preset is restored.",
+          "bedtime_decision_time": "When the cold-morning setback decision is taken."
+        }
+      }
+    },
+    "error": {
+      "band_inverted": "The band minimum must not exceed the band maximum.",
+      "base_outside_band": "The baseline comfort temperature must sit inside the band.",
+      "no_presets": "Pick at least one preset."
+    }
+  },
+  "selector": {
+    "affected_presets": {
+      "options": {
+        "comfort": "Comfort",
+        "boost": "Boost"
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "active": { "name": "Active" },
+      "adaptive": { "name": "Adaptive comfort" },
+      "skip": { "name": "Forecast skip" },
+      "setback": { "name": "Setback depth" },
+      "schedule": { "name": "Schedule" },
+      "preheat": { "name": "Preheat" },
+      "learning": { "name": "Override learning" },
+      "apply_learning": { "name": "Apply learned corrections" }
+    },
+    "number": {
+      "adaptive_slope": { "name": "Adaptive slope" },
+      "skip_threshold": { "name": "Skip threshold" },
+      "max_offset": { "name": "Max offset" },
+      "min_indoor_floor": { "name": "Min indoor floor" },
+      "cold_morning_threshold": { "name": "Cold morning threshold" }
+    },
+    "sensor": {
+      "running_mean_outdoor": { "name": "Running mean outdoor" },
+      "comfort_target": { "name": "Comfort target" },
+      "skip_status": {
+        "name": "Skip status",
+        "state": { "idle": "Idle", "preview": "Preview", "active": "Active", "aborted": "Aborted" }
+      },
+      "skip_preview": {
+        "name": "Skip preview",
+        "state": { "likely": "Likely", "unlikely": "Unlikely", "unknown": "Unknown" }
+      },
+      "warming_rate": { "name": "Warming rate" },
+      "next_block": { "name": "Next block" },
+      "standdown": { "name": "Stand-down" },
+      "learning_preheat_shortfall": { "name": "Learning preheat shortfall" },
+      "learning_slope_error": { "name": "Learning slope error" },
+      "learning_skip_failure": { "name": "Learning skip failure" },
+      "learning_baseline_error": { "name": "Learning baseline error" }
+    },
+    "binary_sensor": {
+      "dormant": { "name": "Dormant" }
+    }
+  },
+  "services": {
+    "override": {
+      "name": "Override",
+      "description": "Stand Hearth down for a room so it heats normally for a while.",
+      "fields": {
+        "entry_id": { "name": "Room", "description": "The Hearth room (config entry)." },
+        "vtherm_entity_id": { "name": "VTherm", "description": "Alternatively, the VTherm climate entity the room drives." },
+        "duration": { "name": "Duration", "description": "How long to stand down. Defaults to the stand-down timeout." }
+      }
+    },
+    "recompute": {
+      "name": "Recompute",
+      "description": "Force an adaptive recompute and write for one room or all rooms.",
+      "fields": {
+        "entry_id": { "name": "Room", "description": "The Hearth room (config entry). Leave empty for all rooms." },
+        "vtherm_entity_id": { "name": "VTherm", "description": "Alternatively, the VTherm climate entity the room drives." },
+        "force": { "name": "Force write", "description": "Write the computed preset temperature even if it has not changed." }
+      }
+    },
+    "refresh_forecast": {
+      "name": "Refresh forecast",
+      "description": "Fetch the forecast now.",
+      "fields": {
+        "entry_id": { "name": "Room", "description": "Limit to one room's weather entity. Leave empty for all." },
+        "vtherm_entity_id": { "name": "VTherm", "description": "Alternatively, the VTherm climate entity the room drives." }
+      }
+    },
+    "set_schedule": {
+      "name": "Set schedule",
+      "description": "Replace a room's warm-by schedule.",
+      "fields": {
+        "entry_id": { "name": "Room", "description": "The Hearth room (config entry)." },
+        "vtherm_entity_id": { "name": "VTherm", "description": "Alternatively, the VTherm climate entity the room drives." },
+        "schedule": { "name": "Schedule", "description": "Weekday to block list, e.g. mon: [{warm_by: '06:30', preset: comfort, skippable: true}, {at: '22:30', preset: eco}]." }
+      }
+    },
+    "reset_learning": {
+      "name": "Reset learning",
+      "description": "Clear the override ledger for a room, or one attribution bucket.",
+      "fields": {
+        "entry_id": { "name": "Room", "description": "The Hearth room (config entry)." },
+        "vtherm_entity_id": { "name": "VTherm", "description": "Alternatively, the VTherm climate entity the room drives." },
+        "bucket": { "name": "Bucket", "description": "Leave empty to reset every bucket." }
+      }
+    }
+  }
+}

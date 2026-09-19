@@ -1,0 +1,69 @@
+override:
+  fields:
+    entry_id:
+      selector:
+        config_entry:
+          integration: hearth
+    vtherm_entity_id:
+      selector:
+        entity:
+          domain: climate
+    duration:
+      selector:
+        duration:
+recompute:
+  fields:
+    entry_id:
+      selector:
+        config_entry:
+          integration: hearth
+    vtherm_entity_id:
+      selector:
+        entity:
+          domain: climate
+    force:
+      default: true
+      selector:
+        boolean:
+refresh_forecast:
+  fields:
+    entry_id:
+      selector:
+        config_entry:
+          integration: hearth
+    vtherm_entity_id:
+      selector:
+        entity:
+          domain: climate
+set_schedule:
+  fields:
+    entry_id:
+      selector:
+        config_entry:
+          integration: hearth
+    vtherm_entity_id:
+      selector:
+        entity:
+          domain: climate
+    schedule:
+      required: true
+      selector:
+        object:
+reset_learning:
+  fields:
+    entry_id:
+      selector:
+        config_entry:
+          integration: hearth
+    vtherm_entity_id:
+      selector:
+        entity:
+          domain: climate
+    bucket:
+      selector:
+        select:
+          options:
+            - preheat_shortfall
+            - slope_error
+            - skip_failure
+            - baseline_error
