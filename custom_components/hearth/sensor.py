@@ -176,8 +176,97 @@ PHASE2_SENSORS: tuple[HearthSensorDescription, ...] = (
 )
 
 
+def _warming_rate_attrs(room: HearthRoom) -> dict[str, Any]:
+    model = room.warming_model
+    rate, learned = room.current_warming_rate()
+    run = room.heating_run
+    return {
+        "learned": learned,
+        "a": model.a,
+        "b": model.b,
+        "evidence_count": model.n_runs,
+        "min_runs": room.const("min_learning_runs"),
+        "default_rate": room.const("default_rate"),
+        "rate_min": room.const("rate_min"),
+        "rate_max": room.const("rate_max"),
+        "outdoor": room.outdoor_temperature(),
+        "vtherm_temperature_slope": room.snapshot.slope,
+        "run_in_progress": run is not None,
+        "run_started_at": run.started_at.isoformat() if run else None,
+        "run_tainted": run.taint_reason if run and run.tainted else None,
+        "recent_runs": [list(r) for r in model.runs[-5:]],
+    }
+
+
+def _next_block_state(room: HearthRoom) -> str | None:
+    now = dt_util.utcnow()
+    nxt = room.next_block(now)
+    if nxt is None:
+        return None
+    local_start = dt_util.as_local(nxt.start)
+    when = local_start.strftime("%H:%M") if local_start.date() == dt_util.now().date() else local_start.strftime("%a %H:%M")
+    plan = room.preheat_plan
+    if nxt.block.warm_by and room.enabled("preheat") and plan is not None and plan.block.key == nxt.key and plan.lead_min > 0:
+        est = dt_util.as_local(plan.start).strftime("%H:%M")
+        return f"{nxt.preset} by {when}, preheat est. {est}"
+    if nxt.block.warm_by:
+        return f"{nxt.preset} by {when}"
+    return f"{nxt.preset} at {when}"
+
+
+def _next_block_attrs(room: HearthRoom) -> dict[str, Any]:
+    now = dt_util.utcnow()
+    cur = room.current_block(now)
+    nxt = room.next_block(now)
+    plan = room.preheat_plan
+    return {
+        "schedule_enabled": room.enabled("schedule"),
+        "preheat_enabled": room.enabled("preheat"),
+        "schedule_empty": room.schedule_model.is_empty,
+        "current_preset": cur.preset if cur else None,
+        "current_block_start": cur.start.isoformat() if cur else None,
+        "current_block_skippable": cur.block.skippable if cur else None,
+        "next_preset": nxt.preset if nxt else None,
+        "next_block_at": nxt.start.isoformat() if nxt else None,
+        "next_block_warm_by": nxt.block.warm_by if nxt else None,
+        "next_block_skippable": nxt.block.skippable if nxt else None,
+        "preheat_start": plan.start.isoformat() if plan else None,
+        "preheat_lead_min": round(plan.lead_min, 1) if plan else None,
+        "preheat_target": plan.target if plan else None,
+        "preheat_deficit": round(plan.deficit, 2) if plan else None,
+        "preheat_rate": round(plan.rate, 2) if plan else None,
+        "preheat_rate_learned": plan.learned if plan else None,
+        "preheat_outdoor_forecast": plan.t_out if plan else None,
+        "preheat_solar_discount": plan.solar_discount if plan else None,
+        "applied_block": room.sched.get("applied_key"),
+        "applied_by": room.sched.get("applied_by"),
+        "schedule": room.schedule_model.to_dict(),
+    }
+
+
+PHASE3_SENSORS: tuple[HearthSensorDescription, ...] = (
+    HearthSensorDescription(
+        key="warming_rate",
+        translation_key="warming_rate",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="°C/h",
+        suggested_display_precision=2,
+        icon="mdi:speedometer",
+        value_fn=lambda r: r.current_warming_rate()[0],
+        attrs_fn=_warming_rate_attrs,
+    ),
+    HearthSensorDescription(
+        key="next_block",
+        translation_key="next_block",
+        icon="mdi:calendar-clock",
+        value_fn=_next_block_state,
+        attrs_fn=_next_block_attrs,
+    ),
+)
+
+
 def all_descriptions() -> tuple[HearthSensorDescription, ...]:
-    return PHASE1_SENSORS + PHASE2_SENSORS
+    return PHASE1_SENSORS + PHASE2_SENSORS + PHASE3_SENSORS
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:

@@ -167,3 +167,28 @@ value Hearth wrote (someone edited it overnight) Hearth leaves it alone and reco
 A preset change that Hearth's write log did not produce (within `write_match_window_s`) ends the skip with
 `manual_intervention` and no restore. Every other abort restores the previous preset. Phase 4 builds
 override detection on the same signal.
+
+## D23. Schedule ownership and manual changes
+
+With the schedule switch on, Hearth applies a block once per instance (keyed by its start time and
+preset) and remembers which instance it applied. It never re-applies within the same block, so a manual
+preset change stands until the next block boundary, and a restart never re-fires a block that was already
+applied (or that a person has since changed). Exact timing comes from a one-shot timer armed for the next
+block start or preheat start, with the 5 min tick as a safety net.
+
+## D24. Preheat is a plan recomputed every tick
+
+The next warm-by block within `preheat_lookahead_hours` (12) gets a plan: target = that preset's VTherm
+number (minus `solar_gain_discount` on sunny mornings for solar rooms), deficit from the current indoor
+temperature, outdoor from the hourly forecast an hour before warm-by (else the current reading), rate from
+the learned model (or 1.0 C/h until five clean runs), lead capped at `max_preheat_min`. When now passes the
+planned start, the block's preset is applied early. Preheat requires the schedule switch; the plan and
+estimate are always visible in `sensor.<room>_next_block` attributes, the state string only shows
+"preheat est." when preheat is enabled.
+
+## D25. Skip and schedule interplay
+
+While a skip is active the schedule does not apply blocks. A non-skippable block with a non-eco preset
+starting after the skip began ends the skip (`non_skippable_block`) and applies. When a skip ends for any
+other reason with the schedule on, the restore target is the current block's preset rather than the preset
+captured at skip start.

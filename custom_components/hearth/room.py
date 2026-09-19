@@ -63,6 +63,7 @@ from .const import (
 )
 from .core.comfort import ComfortResult, RunningMeanState, RunningMeanTracker, comfort_target, seed_running_mean
 from .core.override import WriteLog
+from .mech_schedule import ScheduleMixin
 from .mech_setback import SetbackMixin
 from .mech_skip import SkipMixin
 from .seed import async_daily_means
@@ -89,8 +90,11 @@ def parse_hhmm(value: str, fallback: str) -> time:
     return time(0, 0)
 
 
-class HearthRoom(SkipMixin, SetbackMixin):
-    """Controller for one VTherm."""
+class HearthRoom(ScheduleMixin, SkipMixin, SetbackMixin):
+    """Controller for one VTherm.
+
+    Mixin order matters: a later phase's mixin overrides the hooks of an earlier one.
+    """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
@@ -123,6 +127,7 @@ class HearthRoom(SkipMixin, SetbackMixin):
         self.last_external_change: dict[str, Any] | None = None
         self._outdoor_frozen_reported = False
         self._missing_presets_reported = False
+        self._init_schedule()
 
     # ------------------------------------------------------------- config access
 
@@ -212,7 +217,7 @@ class HearthRoom(SkipMixin, SetbackMixin):
         for t in decision_times:
             prefetch = (datetime.combine(datetime(2000, 1, 1), t) - lead).time()
             self._unsubs.append(async_track_time_change(self.hass, self._on_prefetch, hour=prefetch.hour, minute=prefetch.minute, second=0))
-        self.hass.data[DOMAIN]["forecast"].add_listener(self._on_forecast_update)
+        self._unsubs.append(self.hass.data[DOMAIN]["forecast"].add_listener(self._on_forecast_update))
 
     def _track_time(self, action, hour: int, minute: int, second: int) -> CALLBACK_TYPE:
         return async_track_time_change(self.hass, action, hour=hour, minute=minute, second=second)
@@ -233,6 +238,7 @@ class HearthRoom(SkipMixin, SetbackMixin):
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
+        self._stop_schedule_timer()
         await self._store.async_save(self._data_to_save())
 
     # ------------------------------------------------------------- persistence
@@ -253,9 +259,10 @@ class HearthRoom(SkipMixin, SetbackMixin):
         self._load_mechanisms()
 
     def _load_mechanisms(self) -> None:
-        """Later phases hydrate their state objects from self.mechanisms here."""
+        self._load_schedule_state()
 
     def _dump_mechanisms(self) -> dict:
+        self._dump_schedule_state()
         return dict(self.mechanisms)
 
     def _data_to_save(self) -> dict:
@@ -414,6 +421,7 @@ class HearthRoom(SkipMixin, SetbackMixin):
     async def _evaluate_mechanisms(self, now: datetime, reason: str) -> None:
         await self._evaluate_skip(now)
         await self._evaluate_setback(now)
+        await self._evaluate_schedule(now)
 
     def _update_dormant(self) -> None:
         if not self.global_active:
@@ -534,9 +542,6 @@ class HearthRoom(SkipMixin, SetbackMixin):
     async def async_service_override(self, minutes: float | None) -> None:
         """hearth.override: stand down deliberately. Phase 4 implements the stand-down itself."""
         raise ServiceValidationError("hearth.override needs the override mechanism (phase 4)")
-
-    async def async_service_set_schedule(self, schedule: dict) -> None:
-        raise ServiceValidationError("hearth.set_schedule needs the schedule mechanism (phase 3)")
 
     async def async_service_reset_learning(self, bucket: str | None) -> None:
         raise ServiceValidationError("hearth.reset_learning needs the learning mechanism (phase 4)")

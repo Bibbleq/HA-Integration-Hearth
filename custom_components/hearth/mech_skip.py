@@ -203,10 +203,6 @@ class SkipMixin:
         if ends_at is not None and now >= ends_at:
             await self._end_skip(now, "ended", restore=True)
 
-    def schedule_ends_skip(self) -> bool:
-        """Phase 3: a non-skippable block starting during a skip ends it."""
-        return False
-
     async def _end_skip(self, now: datetime, reason: str, *, restore: bool) -> None:
         skip = self.skip
         previous = skip.get("previous_preset")
@@ -222,10 +218,6 @@ class SkipMixin:
             }
         )
         self._diagnostic("skip_end", f"Skip ended: {reason}")
-
-    def restore_preset_for_skip(self, previous: str | None) -> str | None:
-        """Phase 3 returns the schedule's current preset when Hearth owns the schedule."""
-        return previous
 
     def _manual_change_since(self, since: datetime | None) -> bool:
         """A preset change Hearth did not make, after `since`."""

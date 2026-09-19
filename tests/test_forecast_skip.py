@@ -13,8 +13,8 @@ from custom_components.hearth.const import DOMAIN
 from .conftest import ECO_NUMBER, VTHERM, WEATHER, make_entry, seed_store, set_numbers, set_vtherm, setup_room
 
 
-def local(day: datetime, hh: int, mm: int = 0) -> datetime:
-    return datetime.combine(day.date(), datetime.min.time(), tzinfo=dt_util.get_default_time_zone()).replace(hour=hh, minute=mm)
+def local(day: datetime, hh: int, mm: int = 0, ss: int = 0) -> datetime:
+    return datetime.combine(day.date(), datetime.min.time(), tzinfo=dt_util.get_default_time_zone()).replace(hour=hh, minute=mm, second=ss)
 
 
 def install_weather(
