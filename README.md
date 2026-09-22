@@ -40,7 +40,8 @@ Then *Settings > Devices & services > Add integration > Hearth*. One Hearth room
   "use central configuration" for preset temperatures**; otherwise `number.<vtherm>_preset_comfort_temp`
   does not exist and Hearth reports the room as dormant (`no_preset_entities`).
 - Presence, window, safety and overpowering stay VTherm's job. Hearth is dormant while any of them is active.
-- Before enabling phase 3, disable Tado Early Start on the zone (two preheat brains must not coexist).
+- The TRV side must be a plain actuator with no early-start or smart schedule of its own (on a Tado estate: flat
+  temperatures in the Tado app, Early Start off). Hearth's preheat must be the only warm-up brain.
 
 ## Configuration tiers
 
@@ -126,7 +127,8 @@ Phases are meant to soak for a few weeks each. Everything is per room.
    HA Scheduler entries stay in charge of presets; a Scheduler slot firing mid-skip ends the skip.
    Check `sensor.hearth_<room>_skip_preview` in the evening and `skip_status` in the morning.
 3. **Schedule and preheat**: set the room's schedule with `hearth.set_schedule`, turn on
-   `switch.hearth_<room>_schedule`, then disable that room's HA Scheduler entries. Once the preset
+   `switch.hearth_<room>_schedule`, then disable that room's HA Scheduler entries (the only hand-over
+   needed when the TRVs are plain actuators). Once the preset
    switching looks right, turn on `switch.hearth_<room>_preheat`. The warming-rate model uses a
    conservative 1.0 C/h until it has five clean heating runs.
 4. **Override learning**: turn on `switch.hearth_<room>_override_learning`. From then on a manual preset

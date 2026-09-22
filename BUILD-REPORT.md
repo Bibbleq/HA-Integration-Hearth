@@ -91,9 +91,9 @@ real Versatile Thermostat or a real weather integration:
 7. **Chattiness.** The room store is written at most every 30 s while VTherm attributes change. Watch
    `.storage/hearth.room.*` size and consider recorder excludes for the Hearth diagnostic sensors if the
    attributes are noisy in history.
-8. **Before phase 3 on a room**: disable Tado Early Start on that zone and that room's HA Scheduler
-   entries, set the schedule with `hearth.set_schedule`, then turn on the schedule switch and check
-   `sensor.hearth_<room>_next_block`.
+8. **Before phase 3 on a room**: disable that room's HA Scheduler entries (Tado is already a flat-temperature
+   actuator with no early start, so nothing to change there), set the schedule with `hearth.set_schedule`,
+   then turn on the schedule switch and check `sensor.hearth_<room>_next_block`.
 9. **HACS install path**: the repo is private, so install via HACS custom repository with a GitHub token or
    copy `custom_components/hearth` manually. Once public, remove `continue-on-error` from the HACS CI job and
    add repository topics.
