@@ -138,12 +138,12 @@ Corrections need 3+ decayed same-direction events and a mean pointing the same w
 Home Assistant 2026.9.3 requires Python 3.14.2; CI uses `actions/setup-python` 3.14 with
 `pytest-homeassistant-custom-component==0.13.366`. Core tests are Python 3.11+ and run without HA.
 
-## D18. HACS validation is advisory while the repo is private
+## D18. HACS validation
 
 `hacs/action` fetches `manifest.json` and `hacs.json` anonymously from raw.githubusercontent.com, which
-returns nothing for a private repository, so its manifest checks can never pass until the repo is public.
-The job runs with `continue-on-error: true` and `ignore: brands`; drop both once the repo is public, and add
-GitHub topics (`home-assistant`, `hacs`, `versatile-thermostat`) which the action also requires.
+returns nothing for a private repository. While the repo was private the job ran with `continue-on-error`
+and `ignore: brands`. Both were removed when the repo went public: the brand check is satisfied by the
+local `custom_components/hearth/brand/` assets, and the topics check needs GitHub repository topics.
 
 ## D19. Licence and brand assets
 

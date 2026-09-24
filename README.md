@@ -1,5 +1,8 @@
 # Hearth
 
+[![CI](https://github.com/Bibbleq/HA-Integration-Hearth/actions/workflows/ci.yml/badge.svg)](https://github.com/Bibbleq/HA-Integration-Hearth/actions/workflows/ci.yml)
+[![hacs](https://img.shields.io/badge/HACS-custom-orange.svg)](https://hacs.xyz)
+
 Adaptive comfort and forecast-aware heating control for
 [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) (VTherm),
 as a Home Assistant custom integration.
@@ -17,6 +20,10 @@ Four mechanisms, delivered as four phases, each behind its own switch:
 | 2 | **Forecast skip** and **setback depth**: skip the morning heat when the day will do it for free; shallower overnight setback before very cold mornings | off |
 | 3 | **Warm-by schedule** with **learned preheat**: blocks say when a room should *be* warm; Hearth learns how fast each room warms and starts early enough | off |
 | 4 | **Override learning**: manual changes are recorded in a correction ledger (record-only; application is a separate flag, off) | off |
+
+> **Status: early.** All four mechanisms are implemented and covered by tests against a simulated
+> VTherm, but Hearth has not yet completed a heating season on a live system. Start with phase 1 on one
+> room and keep an eye on it. Hearth is an independent project, not affiliated with Versatile Thermostat.
 
 See [DECISIONS.md](DECISIONS.md) for what was chosen where the design left options open, and
 [BUILD-REPORT.md](BUILD-REPORT.md) for what is done, untested and worth checking on a live system.
