@@ -68,6 +68,7 @@ def vtherm_attrs(
     overpowering: str = "off",
     presence: str = "on",
     slope: float = 0.0,
+    central_mode: str | None = None,
 ) -> dict[str, Any]:
     return {
         "friendly_name": "Living Room",
@@ -77,7 +78,12 @@ def vtherm_attrs(
         "hvac_action": hvac_action,
         "current_temperature": current,
         "temperature": target,
-        "specific_states": {"ext_current_temperature": outdoor, "temperature_slope": slope, "is_on": True},
+        "specific_states": {
+            "ext_current_temperature": outdoor,
+            "temperature_slope": slope,
+            "is_on": True,
+            "last_central_mode": central_mode,
+        },
         "window_manager": {"window_state": window},
         "safety_manager": {"safety_state": safety},
         "power_manager": {"overpowering_state": overpowering},

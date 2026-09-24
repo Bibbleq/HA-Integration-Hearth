@@ -93,9 +93,17 @@ async def test_dormant_reasons(hass: HomeAssistant, hass_storage, services) -> N
     set_numbers(hass)
     room = await setup_room(hass, make_entry())
     assert room.dormant_reason == "away"
+    # A frost preset on its own is not dormant (schedule blocks and hand-set frost)
     set_vtherm(hass, preset="frost")
     await hass.async_block_till_done()
-    assert room.dormant_reason == "frost"
+    assert room.dormant_reason is None
+    # VTherm central "Frost protection" (holiday) is
+    set_vtherm(hass, preset="frost", central_mode="Frost protection")
+    await hass.async_block_till_done()
+    assert room.dormant_reason == "central_frost"
+    set_vtherm(hass, preset="frost", central_mode="Auto")
+    await hass.async_block_till_done()
+    assert room.dormant_reason is None
     set_vtherm(hass, safety="on")
     await hass.async_block_till_done()
     assert room.dormant_reason == "safety"
@@ -108,7 +116,8 @@ async def test_dormant_reasons(hass: HomeAssistant, hass_storage, services) -> N
     hass.states.async_set(VTHERM, "unavailable")
     await hass.async_block_till_done()
     assert room.dormant_reason == "unavailable"
-    assert services["set_value"] == []
+    # Only the two in-scope moments (plain frost, central Auto) may write the comfort number
+    assert all(c.data["entity_id"] == COMFORT_NUMBER for c in services["set_value"])
 
 
 async def test_global_switch_off_disables_everything(hass: HomeAssistant, hass_storage, services) -> None:

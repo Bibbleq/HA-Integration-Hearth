@@ -24,6 +24,7 @@ from .const import (
     CONF_SOLAR_GAIN,
     CONF_VTHERM,
     CONF_WEATHER,
+    CONF_WORKDAY,
     DOMAIN,
     TIER2_DEFAULTS,
 )
@@ -49,6 +50,9 @@ def _tier2_schema(current: dict[str, Any]) -> vol.Schema:
             ),
             vol.Optional(CONF_OUTDOOR_SENSOR, description={"suggested_value": current.get(CONF_OUTDOOR_SENSOR)}): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain=["sensor", "input_number"])
+            ),
+            vol.Optional(CONF_WORKDAY, description={"suggested_value": current.get(CONF_WORKDAY)}): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="binary_sensor", integration="workday")
             ),
             vol.Required(CONF_BASE_TEMP, default=get(CONF_BASE_TEMP)): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=10, max=30, step=0.5, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX)
@@ -95,7 +99,7 @@ def _normalise(user_input: dict[str, Any]) -> dict[str, Any]:
     for key in (CONF_SKIP_DECISION_TIME, CONF_SKIP_END_TIME, CONF_BEDTIME_DECISION_TIME):
         if key in out:
             out[key] = _time_store(out[key])
-    for key in (CONF_WEATHER, CONF_OUTDOOR_SENSOR):
+    for key in (CONF_WEATHER, CONF_OUTDOOR_SENSOR, CONF_WORKDAY):
         if key in out and not out[key]:
             out.pop(key)
     return out
@@ -154,7 +158,7 @@ class HearthOptionsFlow(OptionsFlow):
             errors = _validate(user_input)
             if not errors:
                 options = {**self.config_entry.options, **_normalise(user_input)}
-                for key in (CONF_WEATHER, CONF_OUTDOOR_SENSOR):
+                for key in (CONF_WEATHER, CONF_OUTDOOR_SENSOR, CONF_WORKDAY):
                     if key not in user_input or not user_input.get(key):
                         options.pop(key, None)
                 return self.async_create_entry(title="", data=options)

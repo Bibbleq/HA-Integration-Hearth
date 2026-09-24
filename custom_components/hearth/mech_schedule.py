@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from homeassistant.core import CALLBACK_TYPE, callback
@@ -12,7 +12,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_SCHEDULE, CONF_SOLAR_GAIN, PRESET_ECO, SWITCH_PREHEAT, SWITCH_SCHEDULE
+from .const import CONF_SCHEDULE, CONF_SOLAR_GAIN, CONF_WORKDAY, PRESET_ECO, SWITCH_PREHEAT, SWITCH_SCHEDULE
 from .core.forecast import SUNNY_CONDITIONS
 from .core.preheat import HeatingRun, WarmingModel, lead_minutes, preheat_start, warming_rate
 from .core.schedule import BlockInstance, Schedule, ScheduleError
@@ -137,7 +137,39 @@ class ScheduleMixin:
 
     # ------------------------------------------------------------- evaluation
 
+    async def _refresh_workdays(self, now: datetime) -> None:
+        """Fill schedule_model.non_workdays from the optional workday sensor.
+
+        Uses `workday.check_date` for yesterday to two days ahead, cached per date in
+        the persisted schedule state. A failed lookup is not cached (retried next tick);
+        today falls back to the sensor's own state. Unknown dates follow their weekday.
+        """
+        entity_id = self.option(CONF_WORKDAY)
+        if not entity_id:
+            self.schedule_model.non_workdays = set()
+            return
+        today = dt_util.as_local(now).date()
+        wanted = [today + timedelta(days=d) for d in (-1, 0, 1, 2)]
+        cache: dict[str, bool] = self.sched.setdefault("workdays", {})
+        for day in wanted:
+            key = day.isoformat()
+            if key in cache:
+                continue
+            try:
+                response = await self.hass.services.async_call(
+                    "workday", "check_date", {"entity_id": entity_id, "check_date": key}, blocking=True, return_response=True
+                )
+                cache[key] = bool((response or {})[entity_id]["workday"])
+            except Exception as err:  # noqa: BLE001 - a missing or broken workday sensor must not stop the schedule
+                _LOGGER.debug("%s: workday lookup for %s failed: %s", self.room_name, key, err)
+                if day == today and (state := self.hass.states.get(entity_id)) is not None and state.state in ("on", "off"):
+                    cache[key] = state.state == "on"
+        for key in [k for k in cache if k < wanted[0].isoformat()]:
+            del cache[key]
+        self.schedule_model.non_workdays = {date.fromisoformat(k) for k, v in cache.items() if not v}
+
     async def _evaluate_schedule(self, now: datetime) -> None:
+        await self._refresh_workdays(now)
         self._learn(now)
         if self.schedule_model.is_empty:
             self.preheat_plan = None

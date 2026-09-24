@@ -12,12 +12,16 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+NON_WORKDAY = "non_workday"  # optional blocks for a Mon-Fri date that is not a workday (bank holiday)
+DAY_KEYS = (*WEEKDAYS, NON_WORKDAY)
 WEEKDAY_ALIASES = {
     "monday": "mon",
     "tuesday": "tue",
     "wednesday": "wed",
     "thursday": "thu",
     "friday": "fri",
+    "holiday": NON_WORKDAY,
+    "non-workday": NON_WORKDAY,
     "saturday": "sat",
     "sunday": "sun",
 }
@@ -84,10 +88,16 @@ def parse_block(data: dict) -> Block:
 
 
 class Schedule:
-    """Per-room weekly schedule."""
+    """Per-room weekly schedule.
+
+    A Mon-Fri date listed in `non_workdays` uses the `non_workday` blocks when the
+    schedule defines them, otherwise Saturday's blocks. The glue fills
+    `non_workdays` from a workday sensor; with no sensor every date follows its weekday.
+    """
 
     def __init__(self, days: dict[str, list[Block]]) -> None:
-        self.days = {d: sorted(days.get(d, []), key=lambda b: b.at) for d in WEEKDAYS}
+        self.days = {d: sorted(days.get(d, []), key=lambda b: b.at) for d in DAY_KEYS}
+        self.non_workdays: set[date] = set()
 
     @classmethod
     def parse(cls, blob: dict | None) -> Schedule:
@@ -98,7 +108,7 @@ class Schedule:
         days: dict[str, list[Block]] = {}
         for raw_day, blocks in blob.items():
             day = WEEKDAY_ALIASES.get(str(raw_day).lower(), str(raw_day).lower())
-            if day not in WEEKDAYS:
+            if day not in DAY_KEYS:
                 raise ScheduleError(f"Unknown weekday {raw_day!r}")
             if blocks is None:
                 blocks = []
@@ -112,14 +122,20 @@ class Schedule:
         return cls(days)
 
     def to_dict(self) -> dict:
-        return {d: [b.to_dict() for b in self.days[d]] for d in WEEKDAYS if self.days[d]}
+        return {d: [b.to_dict() for b in self.days[d]] for d in DAY_KEYS if self.days[d]}
 
     @property
     def is_empty(self) -> bool:
-        return not any(self.days.values())
+        return not any(self.days[d] for d in WEEKDAYS)
+
+    def day_key(self, day: date) -> str:
+        """Which block list applies on `day`."""
+        if day.weekday() < 5 and day in self.non_workdays:
+            return NON_WORKDAY if self.days[NON_WORKDAY] else "sat"
+        return WEEKDAYS[day.weekday()]
 
     def blocks_on(self, day: date) -> list[Block]:
-        return self.days[WEEKDAYS[day.weekday()]]
+        return self.days[self.day_key(day)]
 
     def instances_between(self, start: datetime, end: datetime, tzinfo) -> list[BlockInstance]:
         """All block instances with start <= block time < end, ordered."""

@@ -15,6 +15,7 @@ from .const import (
     NUMBER_MIN_INDOOR_FLOOR,
     NUMBER_SKIP_THRESHOLD,
     PRESET_ECO,
+    PRESET_FROST,
     SKIP_ABORTED,
     SKIP_ACTIVE,
     SKIP_IDLE,
@@ -134,6 +135,9 @@ class SkipMixin:
             # Fail toward heating normally, but keep trying for the late window in case a fetch lands.
             skip.update({"pending_reason": "forecast_stale"})
             return
+        if decision.skip and self.snapshot.preset == PRESET_FROST:
+            # Switching frost to eco would add heat, not save it.
+            decision = SkipDecision(False, "in_frost", decision.threshold, decision.forecast_high, decision.condition)
         self._mark_skip_decided(today, decision, now)
         if not decision.skip:
             return

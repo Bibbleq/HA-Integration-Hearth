@@ -71,7 +71,7 @@ Then *Settings > Devices & services > Add integration > Hearth*. One Hearth room
 | `number.hearth_<room>_cold_morning_threshold` | 2 C | Coldest 06:00-09:00 forecast hour below which the overnight setback is shallower |
 
 **Tier 2, config entry options** (*Configure* on the integration): target VTherm, room name, weather
-entity, outdoor sensor override, baseline comfort temperature, comfort band min/max (the hard clamps),
+entity, outdoor sensor override, workday sensor, baseline comfort temperature, comfort band min/max (the hard clamps),
 affected presets, baseline boost temperature, solar-gain flag, skip decision / skip end / bedtime decision
 times. The schedule (phase 3) is also stored here, edited via the `hearth.set_schedule` service.
 
@@ -106,7 +106,7 @@ Each room is a device named *Hearth \<Room\>*. Diagnostics (read-only):
 | `sensor.hearth_<room>_next_block` | Phase 3: "comfort by 06:30, preheat est. 05:52" |
 | `sensor.hearth_<room>_stand_down` | none / until (local timestamp), with cause and the last external change |
 | `sensor.hearth_<room>_learning_<bucket>` | Phase 4: decayed mean bias in C per bucket (`preheat_shortfall`, `slope_error`, `skip_failure`, `baseline_error`) with evidence count and the correction that would apply |
-| `binary_sensor.hearth_<room>_dormant` | On when Hearth is leaving the room alone, with reason (away / frost / window / safety / overpowering / off / disabled / no_preset_entities) |
+| `binary_sensor.hearth_<room>_dormant` | On when Hearth is leaving the room alone, with reason (away / central_frost / window / safety / overpowering / off / unavailable / disabled / no_preset_entities) |
 
 Hearth also fires `hearth_diagnostic` events (seeding, outdoor sensor loss, refused writes) and provides a
 config-entry diagnostics download.
@@ -164,11 +164,21 @@ data:
       - { warm_by: "08:30", preset: comfort, skippable: true }
       - { at: "22:00", preset: eco }
     sun: *weekend
+    # non_workday: optional, see below
 ```
 
 `warm_by` blocks get preheat; `at` blocks fire at the stated time. `skippable` marks blocks the forecast
 skip may suppress. Presets: `frost`, `eco`, `comfort`, `boost`. One year-round schedule per room; the
 adaptive offset, skip and preheat handle the seasons.
+
+**Bank holidays.** Set a Workday integration sensor in the room options. A Monday to Friday that the
+sensor says is not a workday uses the schedule's `non_workday` blocks if it has them, otherwise
+Saturday's. Without a workday sensor every date follows its weekday.
+
+**Frost in a schedule is normal.** Hearth stays active through frost blocks it applied, and a frost
+preset set by hand stands until the next block like any other manual change. Only VTherm's central
+"Frost protection" mode (holiday) makes Hearth dormant. Eco is the better resting state between
+comfort blocks: recovering from frost can take longer than the 120 minute preheat cap allows.
 
 ## Safety behaviour
 
@@ -176,7 +186,7 @@ adaptive offset, skip and preheat handle the seasons.
   `[band_min, band_max]`; eco is never lowered by Hearth and never raised above `band_max` or the comfort target.
 - A stale forecast (older than 3 h) disables skip and setback decisions; heating proceeds normally.
 - Outdoor sensor loss freezes the running mean and holds the offset.
-- Any VTherm away / frost / window / safety / overpowering state makes Hearth dormant for that room.
+- VTherm presence away, central frost protection, window, safety or overpowering makes Hearth dormant for that room.
 - `min_indoor_floor` breach cancels any Hearth-originated eco state immediately.
 - Restart is recompute-from-state: Hearth never re-fires actions blindly.
 

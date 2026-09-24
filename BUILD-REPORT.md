@@ -83,7 +83,7 @@ real Versatile Thermostat or a real weather integration:
 4. **First real write.** Watch the VTherm comfort number and the VTherm target after the first adaptive
    write; confirm VTherm picks up the number change without switching preset, and that the change shows in
    `sensor.hearth_<room>_comfort_target` under `last_write`.
-5. **Dormant reasons.** Open a window, set presence away, switch to frost: the dormant sensor should follow
+5. **Dormant reasons.** Open a window, set presence away, set VTherm central mode to frost protection: the dormant sensor should follow
    with the right reason each time. If one does not, dump the VTherm's attributes and compare with D1.
 6. **Forecast cache.** Set a weather entity, call `hearth.refresh_forecast`, and check
    `sensor.hearth_<room>_skip_status` attributes `forecast_fresh` and `forecast_fetched_at`, and the
@@ -96,6 +96,14 @@ real Versatile Thermostat or a real weather integration:
    then turn on the schedule switch and check `sensor.hearth_<room>_next_block`.
 9. **HACS install path**: add the repo in HACS as a custom repository (category Integration), or copy
    `custom_components/hearth` manually.
+
+## Changes after the first build
+
+- **0.5.0**: a frost preset no longer makes a room dormant (only VTherm central frost protection does,
+  D29), so schedules with frost blocks keep running; skips never start from frost; optional workday
+  sensor for bank holidays (D30). Verify on the live system that `specific_states.last_central_mode`
+  reads `Frost protection` when you set central frost, and that the workday sensor's `check_date`
+  service answers for future dates.
 
 ## Known gaps and follow-ups
 

@@ -216,3 +216,27 @@ the raw value is kept in the stand-down sensor's `last_override` attribute.
 
 Override detection runs from the climate state-change listener before the controller re-evaluates, so it
 snapshots the *new* state for dormancy and preset context rather than the last evaluated snapshot.
+
+## D29. Frost is not dormancy; VTherm central frost is (supersedes the frost part of spec section 5)
+
+The spec made any frost preset dormant. With Hearth owning the schedule that stalls it: the first frost
+block Hearth applies would make the room dormant and no later block would ever apply. Agreed replacement:
+
+1. Frost applied by Hearth's schedule is a normal state; Hearth stays active.
+2. VTherm's central mode "Frost protection" (read from `specific_states.last_central_mode`) is the
+   holiday switch and makes the room dormant with reason `central_frost`.
+3. Frost set by hand on one room is a manual change. The schedule leaves it until the next block
+   boundary (D23); with override learning on it also stands the room down. Frost is not an affected
+   preset, so it is not learned from unless it replaces comfort/boost.
+
+A skip never starts while the room is in frost (reason `in_frost`): switching frost to eco would add heat.
+Eco rather than frost is the recommended resting state between comfort blocks (recovery from frost can
+exceed the preheat cap, and setback depth only acts on eco); frost stays available per block.
+
+## D30. Bank holidays via the Workday integration
+
+Optional Tier 2 `workday_entity_id`. Each evaluation Hearth asks `workday.check_date` about yesterday to
+two days ahead (cached per date in the room store). A Mon-Fri date that is not a workday uses the
+schedule's `non_workday` blocks, or Saturday's when there are none. Weekends always use their own blocks.
+A failed lookup is not cached and is retried next tick; today falls back to the sensor's state; anything
+else unknown follows its weekday.

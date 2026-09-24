@@ -30,15 +30,15 @@ from homeassistant.util import slugify
 
 from .const import (
     DORMANT_AWAY,
-    DORMANT_FROST,
+    DORMANT_CENTRAL_FROST,
     DORMANT_OFF,
     DORMANT_OVERPOWERING,
     DORMANT_SAFETY,
     DORMANT_UNAVAILABLE,
     DORMANT_WINDOW,
-    PRESET_FROST,
     PRESET_POWER,
     PRESET_SAFETY,
+    VT_ATTR_CENTRAL_MODE,
     VT_ATTR_CURRENT_TEMP,
     VT_ATTR_EXT_TEMP,
     VT_ATTR_HVAC_ACTION,
@@ -49,6 +49,7 @@ from .const import (
     VT_ATTR_SLOPE,
     VT_ATTR_TARGET_TEMP,
     VT_ATTR_WINDOW_STATE,
+    VT_CENTRAL_MODE_FROST,
     VT_POWER_MANAGER,
     VT_PRESENCE_MANAGER,
     VT_PRESET_NUMBER_SUFFIX,
@@ -97,6 +98,7 @@ class VThermSnapshot:
     safety_on: bool
     overpowering: bool
     away: bool
+    central_mode: str | None = None
 
     @property
     def heating(self) -> bool:
@@ -117,8 +119,11 @@ class VThermSnapshot:
             return DORMANT_WINDOW
         if self.away:
             return DORMANT_AWAY
-        if self.preset == PRESET_FROST:
-            return DORMANT_FROST
+        if self.central_mode == VT_CENTRAL_MODE_FROST:
+            # Holiday / "frost protect all" from VTherm's central configuration.
+            # A frost preset on its own is not dormant: Hearth's schedule applies frost blocks,
+            # and a hand-set frost is a manual change that stands until the next block.
+            return DORMANT_CENTRAL_FROST
         return None
 
 
@@ -145,6 +150,7 @@ def snapshot_from_state(state: State | None) -> VThermSnapshot:
         safety_on=safety_state == STATE_ON,
         overpowering=overpowering_state == STATE_ON,
         away=presence_state in (STATE_OFF, STATE_NOT_HOME),
+        central_mode=_nested(a, VT_SPECIFIC_STATES, VT_ATTR_CENTRAL_MODE),
     )
 
 

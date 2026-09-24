@@ -137,3 +137,34 @@ def test_block_instance_key_unique_per_day():
     a = s.current(datetime(2026, 1, 14, 10, 0, tzinfo=LONDON), LONDON)
     b = s.current(datetime(2026, 1, 15, 10, 0, tzinfo=LONDON), LONDON)
     assert a.key != b.key and a.preset == b.preset
+
+
+def test_non_workday_uses_saturday_blocks_by_default():
+    from datetime import date
+
+    s = Schedule.parse(BLOB)
+    bank_holiday = date(2026, 8, 31)  # a Monday
+    s.non_workdays = {bank_holiday}
+    assert s.day_key(bank_holiday) == "sat"
+    assert [b.at for b in s.blocks_on(bank_holiday)] == [time(8, 30), time(22, 0)]
+    now = datetime(2026, 8, 31, 7, 0, tzinfo=LONDON)
+    assert s.next(now, LONDON).start == datetime(2026, 8, 31, 8, 30, tzinfo=LONDON)
+    # The next day is an ordinary Tuesday again
+    assert s.day_key(date(2026, 9, 1)) == "tue"
+
+
+def test_non_workday_blocks_when_defined_and_weekends_unaffected():
+    from datetime import date
+
+    blob = dict(BLOB)
+    blob["holiday"] = [{"warm_by": "09:00", "preset": "comfort"}]
+    s = Schedule.parse(blob)
+    assert "non_workday" in s.to_dict()
+    s.non_workdays = {date(2026, 8, 31), date(2026, 9, 5)}  # Monday, Saturday
+    assert s.day_key(date(2026, 8, 31)) == "non_workday"
+    assert s.day_key(date(2026, 9, 5)) == "sat"  # weekends always use their own blocks
+    assert Schedule.parse(s.to_dict()).to_dict() == s.to_dict()
+
+
+def test_non_workday_only_schedule_counts_as_empty():
+    assert Schedule.parse({"non_workday": [{"at": "07:00", "preset": "eco"}]}).is_empty

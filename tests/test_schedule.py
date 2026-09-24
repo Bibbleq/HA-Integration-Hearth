@@ -286,3 +286,135 @@ async def test_restart_does_not_refire_applied_block(hass: HomeAssistant, hass_s
     set_numbers(hass)
     await setup_room(hass, make_entry(options=opts()))
     assert services["set_preset"] == []
+
+
+FROSTY = [
+    {"at": "00:00", "preset": "frost"},
+    {"warm_by": "06:30", "preset": "comfort", "skippable": True},
+    {"at": "09:00", "preset": "frost"},
+    {"warm_by": "16:00", "preset": "comfort"},
+    {"at": "22:00", "preset": "eco"},
+]
+FROSTY_SCHEDULE = {d: FROSTY for d in ("mon", "tue", "wed", "thu", "fri", "sat", "sun")}
+
+
+async def test_schedule_frost_block_does_not_stall_the_schedule(hass: HomeAssistant, hass_storage, services, freezer) -> None:
+    today = dt_util.start_of_local_day()
+    await tick(hass, freezer, local(today, 8, 0))
+    seed_store(hass_storage, t_rm=10.0, settings={"schedule": True})
+    set_vtherm(hass, preset="comfort", current=19.0)
+    set_numbers(hass)
+    room = await setup_room(hass, make_entry(options=opts(schedule=FROSTY_SCHEDULE)))
+    # 09:00 frost block applies
+    await tick(hass, freezer, local(today, 9, 0, 3))
+    assert services["set_preset"][-1].data["preset_mode"] == "frost"
+    set_vtherm(hass, preset="frost", current=19.0)
+    await hass.async_block_till_done()
+    assert room.dormant_reason is None
+    assert room.last_external_change is None  # our own write, not a manual change
+    # 16:00 comfort block still applies from frost
+    await tick(hass, freezer, local(today, 16, 0, 3))
+    assert services["set_preset"][-1].data["preset_mode"] == "comfort"
+
+
+async def test_hand_set_frost_stands_until_next_block(hass: HomeAssistant, hass_storage, services, freezer) -> None:
+    today = dt_util.start_of_local_day()
+    await tick(hass, freezer, local(today, 17, 0))
+    seed_store(hass_storage, t_rm=10.0, settings={"schedule": True})
+    set_vtherm(hass, preset="comfort", current=19.0)
+    set_numbers(hass)
+    room = await setup_room(hass, make_entry(options=opts(schedule=FROSTY_SCHEDULE)))
+    calls = len(services["set_preset"])
+    freezer.move_to(local(today, 18, 0))
+    set_vtherm(hass, preset="frost", current=19.0)
+    await hass.async_block_till_done()
+    assert room.dormant_reason is None and room.last_external_change["to"] == "frost"
+    await tick(hass, freezer, local(today, 20, 0))
+    assert len(services["set_preset"]) == calls  # not overridden mid-block
+    await tick(hass, freezer, local(today, 22, 0, 3))
+    assert services["set_preset"][-1].data["preset_mode"] == "eco"
+
+
+async def test_central_frost_holds_the_schedule(hass: HomeAssistant, hass_storage, services, freezer) -> None:
+    today = dt_util.start_of_local_day()
+    await tick(hass, freezer, local(today, 8, 0))
+    seed_store(hass_storage, t_rm=10.0, settings={"schedule": True})
+    set_vtherm(hass, preset="frost", current=15.0, central_mode="Frost protection")
+    set_numbers(hass)
+    room = await setup_room(hass, make_entry(options=opts(schedule=FROSTY_SCHEDULE)))
+    assert room.dormant_reason == "central_frost"
+    await tick(hass, freezer, local(today, 16, 0, 3))
+    assert services["set_preset"] == []
+    # Holiday ends: central mode back to Auto, the current block applies
+    set_vtherm(hass, preset="frost", current=15.0, central_mode="Auto")
+    await hass.async_block_till_done()
+    assert services["set_preset"][-1].data["preset_mode"] == "comfort"
+
+
+async def test_skip_does_not_start_in_frost(hass: HomeAssistant, hass_storage, services, freezer) -> None:
+    today = dt_util.start_of_local_day()
+    await tick(hass, freezer, local(today, 6, 50))
+    seed_store(hass_storage, t_rm=10.0, settings={"skip": True})
+    set_vtherm(hass, preset="frost", current=18.0)
+    set_numbers(hass)
+    install_weather(hass, high=25.0)
+    room = await setup_room(hass, make_entry(options={"weather_entity_id": WEATHER}))
+    await refresh_forecast(hass)
+    assert room.skip["reason"] == "in_frost"
+    assert services["set_preset"] == []
+
+
+def install_workday(hass: HomeAssistant, non_workdays: set[str], *, fail: bool = False) -> list:
+    """Fake workday sensor with a check_date responder."""
+    from homeassistant.core import ServiceCall, SupportsResponse
+
+    hass.states.async_set("binary_sensor.workday", "off" if dt_util.now().date().isoformat() in non_workdays else "on")
+    calls = []
+
+    async def responder(call: ServiceCall):
+        calls.append(call.data["check_date"])
+        if fail:
+            raise RuntimeError("workday down")
+        day = str(call.data["check_date"])
+        return {"binary_sensor.workday": {"workday": day not in non_workdays}}
+
+    hass.services.async_register("workday", "check_date", responder, supports_response=SupportsResponse.ONLY)
+    return calls
+
+
+def next_weekday(from_day, weekday: int):
+    d = from_day
+    while d.weekday() != weekday:
+        d += timedelta(days=1)
+    return d
+
+
+async def test_bank_holiday_uses_weekend_blocks(hass: HomeAssistant, hass_storage, services, freezer) -> None:
+    monday = next_weekday(dt_util.start_of_local_day() + timedelta(days=1), 0)
+    await tick(hass, freezer, local(monday, 5, 0))
+    weekend = [{"warm_by": "08:30", "preset": "comfort"}, {"at": "22:00", "preset": "eco"}]
+    sched = {**{d: WEEKDAY for d in ("mon", "tue", "wed", "thu", "fri")}, "sat": weekend, "sun": weekend}
+    install_workday(hass, {monday.date().isoformat()})
+    seed_store(hass_storage, t_rm=10.0, settings={"schedule": True})
+    set_vtherm(hass, preset="eco", current=18.0)
+    set_numbers(hass)
+    room = await setup_room(hass, make_entry(options=opts(schedule=sched, workday_entity_id="binary_sensor.workday")))
+    assert monday.date() in room.schedule_model.non_workdays
+    assert room.next_block(dt_util.utcnow()).start == local(monday, 8, 30)
+    await tick(hass, freezer, local(monday, 6, 30, 3))
+    assert services["set_preset"] == []  # no weekday 06:30 block on a bank holiday
+    await tick(hass, freezer, local(monday, 8, 30, 3))
+    assert services["set_preset"][-1].data["preset_mode"] == "comfort"
+
+
+async def test_workday_lookup_failure_falls_back_to_weekday(hass: HomeAssistant, hass_storage, services, freezer) -> None:
+    monday = next_weekday(dt_util.start_of_local_day() + timedelta(days=1), 0)
+    await tick(hass, freezer, local(monday, 5, 0))
+    calls = install_workday(hass, set(), fail=True)
+    seed_store(hass_storage, t_rm=10.0, settings={"schedule": True})
+    set_vtherm(hass, preset="eco", current=18.0)
+    set_numbers(hass)
+    room = await setup_room(hass, make_entry(options=opts(workday_entity_id="binary_sensor.workday")))
+    assert calls  # it tried
+    assert room.schedule_model.non_workdays == set()
+    assert room.next_block(dt_util.utcnow()).start == local(monday, 6, 30)

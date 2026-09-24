@@ -26,7 +26,8 @@
           "solar_gain": "Room has solar gain",
           "skip_decision_time": "Skip decision time",
           "skip_end_time": "Skip end time",
-          "bedtime_decision_time": "Bedtime decision time"
+          "bedtime_decision_time": "Bedtime decision time",
+          "workday_entity_id": "Workday sensor"
         },
         "data_description": {
           "weather_entity_id": "Optional. Leave empty to share another room's weather entity or the first one in Home Assistant.",
@@ -39,7 +40,8 @@
           "solar_gain": "Lowers the forecast-skip threshold on sunny days and trims the preheat target.",
           "skip_decision_time": "When the morning forecast-skip decision is taken.",
           "skip_end_time": "When an active skip ends and the schedule preset is restored.",
-          "bedtime_decision_time": "When the cold-morning setback decision is taken."
+          "bedtime_decision_time": "When the cold-morning setback decision is taken.",
+          "workday_entity_id": "Optional. A Workday integration sensor. On a Monday to Friday that is not a workday (bank holiday), the schedule uses its non_workday blocks, or Saturday's if it has none."
         }
       }
     },
@@ -67,7 +69,8 @@
           "solar_gain": "Room has solar gain",
           "skip_decision_time": "Skip decision time",
           "skip_end_time": "Skip end time",
-          "bedtime_decision_time": "Bedtime decision time"
+          "bedtime_decision_time": "Bedtime decision time",
+          "workday_entity_id": "Workday sensor"
         },
         "data_description": {
           "weather_entity_id": "Optional. Leave empty to share another room's weather entity or the first one in Home Assistant.",
@@ -80,7 +83,8 @@
           "solar_gain": "Lowers the forecast-skip threshold on sunny days and trims the preheat target.",
           "skip_decision_time": "When the morning forecast-skip decision is taken.",
           "skip_end_time": "When an active skip ends and the schedule preset is restored.",
-          "bedtime_decision_time": "When the cold-morning setback decision is taken."
+          "bedtime_decision_time": "When the cold-morning setback decision is taken.",
+          "workday_entity_id": "Optional. A Workday integration sensor. On a Monday to Friday that is not a workday (bank holiday), the schedule uses its non_workday blocks, or Saturday's if it has none."
         }
       }
     },

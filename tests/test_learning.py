@@ -118,10 +118,11 @@ async def test_exclusions_dormant_storm_unaffected(hass: HomeAssistant, hass_sto
     assert len(room.ledger.entries) == 2
     assert room.learning["ignored"][-1]["reason"] == "unaffected_preset"
     assert not room.standdown_active
-    # eco -> frost makes the room dormant: ignored as such
+    # eco -> frost by hand: neither preset is affected, so it is not learned from
     set_vtherm(hass, preset="frost", current=19.0, target=7.0)
     await hass.async_block_till_done()
-    assert room.learning["ignored"][-1]["reason"] == "dormant"
+    assert room.learning["ignored"][-1]["reason"] == "unaffected_preset"
+    assert room.dormant_reason is None
     # frost -> comfort qualifies (warmer)
     freezer.tick(timedelta(hours=4))
     set_vtherm(hass, preset="comfort", current=19.0, target=20.5)

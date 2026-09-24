@@ -1,8 +1,15 @@
 {
   "domain": "hearth",
   "name": "Hearth",
-  "after_dependencies": ["recorder", "climate", "weather", "number"],
-  "codeowners": ["@Bibbleq"],
+  "after_dependencies": [
+    "recorder",
+    "climate",
+    "weather",
+    "number"
+  ],
+  "codeowners": [
+    "@Bibbleq"
+  ],
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/Bibbleq/HA-Integration-Hearth",
@@ -10,5 +17,5 @@
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/Bibbleq/HA-Integration-Hearth/issues",
   "requirements": [],
-  "version": "0.4.0"
+  "version": "0.5.0"
 }
