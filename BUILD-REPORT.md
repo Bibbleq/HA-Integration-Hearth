@@ -6,7 +6,7 @@ Python 3.14, hassfest, and HACS validation.
 
 | Check | State |
 |---|---|
-| pytest (414 tests at 0.7.0: 246 pure-core, 168 HA-level) | green on CI |
+| pytest (435 tests at 0.7.0: 246 pure-core, 189 HA-level) | green on CI |
 | hassfest | green |
 | HACS validation | strict since the repo went public (see D18) |
 
@@ -110,7 +110,7 @@ real Versatile Thermostat or a real weather integration:
   `parts`; validates everything before applying) and `hearth.undo_reset`; `hearth.reset_learning` now stashes what
   it clears as `last_reset` in the room store (no store migration; 0.6.x stores load unchanged); `last_reset_at` and
   `last_reset_bucket` on the warming-rate and `learning_<bucket>` sensors and `room.last_reset` in the diagnostics
-  download. Also fixes the Hearth actions disappearing after a reload of the only room. Tests: 414 (was 290).
+  download. Also fixes the Hearth actions disappearing after a reload of the only room. Tests: 435 (was 290).
   Verify on the live system:
   1. Developer Tools > Actions, YAML mode: `hearth.export_learning` with `vtherm_entity_id` returns the room's
      blob (`format`, `version`, `parts`) and with no room returns `rooms`; the response is readable and complete
@@ -144,6 +144,21 @@ real Versatile Thermostat or a real weather integration:
       still learnt (VTherm moves its own target afterwards without the person's context, which Hearth bridges via the
       number's own state; confirm on the live system).
   12. Check the context of the Scheduler's own preset writes: the grace window assumes they carry no user.
+
+  Observe-only rooms (D49-D53):
+  13. Upgrade: the Living Room and Office have `switch.hearth_<room>_observe` off and behave exactly as before. Add a
+      new test room: it starts with observe on, and a restart keeps whichever state you left it in.
+  14. Observing: change the room's adaptive slope, wait for a Scheduler preset change, and confirm nothing is written to
+      VTherm (compare the comfort-target sensor, which still moves, with the preset number, which does not) and no
+      stand-down or ledger entry appears; `last_external_change` is still set. The Scheduler schedules stay on.
+  15. Leave an observing room for a few days on its Scheduler schedules: `evidence_count` on the warming-rate sensor
+      grows from the runs the Scheduler's preset changes start (the first run after each comfort block must not be
+      tainted by the change that began it; if runs never count, look at the order of the preset and heating events on
+      the live VTherm).
+  16. A VTherm with no preset numbers: observing shows no dormancy; switching observe off shows `no_preset_entities`
+      and the Repair, and the Repair clears when the numbers exist.
+  17. Switch observe off with the schedule switch on: the Scheduler schedules go off, the current block is applied, and
+      `next_block` shows `observe_only: false`. Switch it back on: the schedules come back on.
 - **0.6.1**: `hearth.reset_learning` with `bucket: warming_rate` clears the learned warming rate (D38). Use it
   after pointing a VTherm at a different temperature sensor.
 - **0.6.0**: Scheduler entities as a room's schedule source, with automatic take-over and fallback

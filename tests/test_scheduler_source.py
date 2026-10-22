@@ -929,3 +929,57 @@ async def test_a_switch_off_that_does_not_stick_is_retried_later(hass: HomeAssis
     freezer.tick(timedelta(seconds=30))
     await room.async_evaluate("tick")
     assert hass.states.get(WEEKDAY_ID).state == "off"
+
+
+# ------------------------------------------------------------------ observe only (D49)
+
+OBSERVE = "switch.hearth_living_room_observe"
+
+
+async def test_observe_on_hands_the_sources_back_and_off_takes_over_again(hass: HomeAssistant, hass_storage, env, freezer) -> None:
+    room = await owned_room(hass, hass_storage, freezer)
+    env.clear()
+    await switch(hass, OBSERVE, True)
+    assert not room.took_over and room.observing
+    assert sorted(env.calls_for("turn_on")) == sorted(SOURCES)
+    assert hass.states.get(WEEKDAY_ID).state == "on" and hass.states.get(WEEKEND_ID).state == "on"
+    # The schedule switch keeps its value, and the derived schedule still shows what Hearth would do
+    assert room.switch("schedule") is True and not room.schedule_model.is_empty
+    assert hass.states.get(NEXT_BLOCK).attributes["observe_only"] is True
+    env.clear()
+    await switch(hass, OBSERVE, False)
+    assert room.took_over
+    assert sorted(env.calls_for("turn_off")) == sorted(SOURCES)
+    assert hass.states.get(WEEKDAY_ID).state == "off"
+
+
+async def test_an_observing_room_never_takes_over_and_leaves_re_enabled_sources_alone(
+    hass: HomeAssistant, hass_storage, env, freezer
+) -> None:
+    today = dt_util.start_of_local_day()
+    freezer.move_to(local(today, 3, 0))
+    seed_store(hass_storage, t_rm=10.0, settings={"schedule": True, "observe": True})
+    room = await setup_room(hass, make_entry(options=source_options()))
+    assert not room.took_over and env.calls == []
+    assert hass.states.get(WEEKDAY_ID).state == "on"
+    assert room.schedule_model.to_dict()["mon"] == WEEKDAY_BLOCKS  # derivation keeps working
+    env.set_state(WEEKDAY_ID, "off")
+    await settle(hass)
+    env.set_state(WEEKDAY_ID, "on")
+    await settle(hass)
+    assert env.calls == [] and hass.states.get(WEEKDAY_ID).state == "on"  # no re-assert: Hearth does not own the room
+    assert issue(hass, ISSUE_SOURCE_ENABLED, room.entry) is None
+
+
+async def test_observe_on_for_one_room_blocks_a_peer_sharing_its_source(hass: HomeAssistant, hass_storage, env, freezer) -> None:
+    """A source shared with a peer that is only observing would leave that peer without a schedule: not taken over."""
+    room = await owned_room(hass, hass_storage, freezer)
+    env.update(WEEKDAY_ID, entities=[VTHERM, BEDROOM])
+    bedroom = await _bedroom_entry(hass, schedule_on=True, hass_storage=hass_storage)
+    hass_storage["hearth.room.climate_bedroom"]["data"]["settings"]["observe"] = True
+    bedroom.add_to_hass(hass)
+    await hass.config_entries.async_setup(bedroom.entry_id)
+    await hass.async_block_till_done()
+    await room.async_evaluate("test")
+    assert not room.took_over
+    assert room.source_blocked_reason == "scheduler_shared_source"

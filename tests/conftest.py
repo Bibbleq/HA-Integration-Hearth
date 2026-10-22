@@ -44,6 +44,21 @@ if HA_AVAILABLE:
 
 
 @pytest.fixture(autouse=True)
+def existing_room_store(request):
+    """Rooms in these tests are upgrades: a store with (empty) settings, so they start live.
+
+    A brand-new room starts observing (D49). The tests for that remove this store first.
+    """
+    if not HA_AVAILABLE or "hass" not in request.fixturenames:
+        return
+    hass_storage = request.getfixturevalue("hass_storage")
+    hass_storage.setdefault(
+        "hearth.room.climate_living_room",
+        {"version": 1, "key": "hearth.room.climate_living_room", "data": {"settings": {}}},
+    )
+
+
+@pytest.fixture(autouse=True)
 def mock_recorder_seed(monkeypatch):
     if not HA_AVAILABLE:
         return

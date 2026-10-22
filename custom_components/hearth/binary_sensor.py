@@ -47,4 +47,5 @@ class DormantBinarySensor(HearthEntity, BinarySensorEntity):
             "away": snap.away,
             "global_active": self.room.global_active,
             "global_paused": self.room.global_paused,
+            "observe_only": self.room.observing,
         }

@@ -527,3 +527,58 @@ neither saw it, the change is handled as usual and the source event then takes i
 `last_override` and `last_external_change` that the change altered, which are captured for that purpose before every
 external change. A real person's change within 15 s of a re-enable can be misread as the Scheduler's; that is the price
 of the window.
+
+## D49. Observe only: a per-room switch, and which rooms start in it
+
+`switch.hearth_<room>_observe` is a Tier 1 setting like the mechanism switches, stored in the room's `settings`
+under `observe`. Its default is OFF, so a store written before 0.7.0 (which always has its `settings` key, possibly
+empty) reads as live and an upgrade changes nothing: the Living Room and Office stay in control. A room created after
+this release starts observing, implemented as "a room whose store has no settings yet": `_async_load` finds no store
+(or one with no `settings` key), marks the room `new_room`, starts it with `{"observe": True}` and saves. No config-flow
+field was added: the rule needs nothing the user has to answer, and a field would only have a second default to keep
+in step. Consequences worth knowing: re-adding a removed room keeps its stored settings (it is not new), and a crash
+before the first save simply starts the room observing again, which is the safe direction. The entity name is
+`Observe`, so the id is `switch.hearth_<room>_observe`; `SWITCH_OBSERVE` is in `ROOM_SWITCHES`.
+
+## D50. What observe stops and what it keeps
+
+One choke point. `enabled(key)` (the "may act" test every writer already uses) is now false for every mechanism key
+while the room is observing; the new `wants(key)` is the switch as configured. Nothing is written to the stored
+switches, so switching observe off restores exactly what was set. Consequently, while observing: no adaptive write
+(the comfort target is still computed and shown), no skip, setback, schedule or preheat writes, no stand-down and no
+ledger entry (override handling is behind `enabled(learning)`; the change is still stored as `last_external_change`),
+no applied corrections (`learned_*` use `wants`, so the shown comfort target includes the correction that would apply),
+and the room never takes over Scheduler sources. `hearth.override` starts no stand-down on an observing room (it logs a
+diagnostic) because a stand-down would also taint learning runs. Observing a taken-over room hands the sources back by
+the existing path (`enabled(schedule)` goes false); switching observe off with the schedule switch on takes over by
+the existing path, shared-source guard included. The D48 re-assert only runs for taken-over rooms, so it does not run
+while observing. A room that is observing counts as not owning its schedule for the shared-source guard of its peers.
+Kept running: the warming-rate learner, the outdoor running mean, the Scheduler derivation, the forecast fetches, the
+skip preview, and the preheat plan and next-block sensor, which use `wants` so they show what Hearth would do.
+Turning observe on while a skip or setback is active ends it through the usual "mechanism switched off" restore; that is
+the one write, and it undoes Hearth's own earlier change. `observe_only` is an attribute of the next-block,
+comfort-target and dormant sensors.
+
+## D51. The learning gate, and the Scheduler's own preset change
+
+A run is clean only if the room was not dormant, had no stand-down and saw no external or target change after the run
+started (unchanged, D12). In observe mode the Scheduler's preset change is the source of the data, so the order
+matters: the external change is stamped when the VTherm state changes, the run starts at the first evaluation that sees
+heating on the affected preset (its start time and target are taken then), and the taint test is
+`last_external_change_at > run.started_at`, strictly. A change that begins the block is therefore earlier than the run
+it begins and does not taint it, and a change after the run started does. Tested in that order.
+
+## D52. Preset numbers are only needed to write
+
+The `no_preset_entities` dormant check no longer applies while observing, because the numbers matter only for writing,
+and dormancy would taint every run. With observe off and the numbers missing the room is dormant as before and, new, a
+Repair `no_preset_entities` (per entry, warning, not fixable, placeholders `room` and `vtherm`) explains that the VTherm
+must untick "use central configuration" for preset temperatures, that VTherm then creates the numbers at 7 C, and that
+they must be set before Hearth takes over. It clears when the numbers appear, when the room starts observing, and on
+unload or removal. The `ISSUE_NO_PRESET_ENTITIES` constant is in `const.py` and joins `ALL_ISSUES` for cleanup.
+
+## D53. Precedence
+
+`hearth_active` off (`disabled`) beats `paused`, which beats observe. Observe is not a dormant reason: an observing
+room is not dormant and keeps learning, and the VTherm-derived reasons (window, away, safety, off, unavailable, central
+frost) still apply to it and still taint runs. A paused observing room reads `paused`.

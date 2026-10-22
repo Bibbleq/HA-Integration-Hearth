@@ -287,7 +287,7 @@ class LearningMixin:
         )
 
     def learned_target_offset(self) -> float:
-        if not self.enabled(SWITCH_APPLY_LEARNING):
+        if not self.wants(SWITCH_APPLY_LEARNING):
             return 0.0
         total = self._correction(BUCKET_BASELINE)
         t_rm = self.running_mean.t_rm
@@ -297,12 +297,12 @@ class LearningMixin:
         return max(-bound, min(bound, total))
 
     def learned_skip_threshold_offset(self) -> float:
-        if not self.enabled(SWITCH_APPLY_LEARNING):
+        if not self.wants(SWITCH_APPLY_LEARNING):
             return 0.0
         return self._correction(BUCKET_SKIP)
 
     def learned_safety_factor_multiplier(self) -> float:
-        if not self.enabled(SWITCH_APPLY_LEARNING):
+        if not self.wants(SWITCH_APPLY_LEARNING):
             return 1.0
         pct = float(self.const("learning_safety_factor_bound_pct")) / 100.0
         c = self._correction(BUCKET_PREHEAT) / float(self.const("learning_target_bound"))
@@ -332,6 +332,9 @@ class LearningMixin:
 
     async def async_service_override(self, minutes: float | None) -> None:
         now = dt_util.utcnow()
+        if self.observing:
+            self._diagnostic("override_service", "Observe only: no stand-down started, Hearth is not controlling this room")
+            return
         self._start_standdown(now, "service", minutes)
         if self.skip_active:
             await self._end_skip(now, "override_service", restore=True)

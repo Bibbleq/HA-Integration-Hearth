@@ -28,6 +28,9 @@ __all__ = [
 ]
 
 DOMAIN: Final = "hearth"
+
+# Repair raised when the VTherm has no per-room preset temperature numbers and the room is not observing (D52)
+ISSUE_NO_PRESET_ENTITIES: Final = "no_preset_entities"
 STORAGE_VERSION: Final = 1
 STORAGE_KEY_ROOM: Final = "hearth.room"
 STORAGE_KEY_FORECAST: Final = "hearth.forecast"
@@ -92,6 +95,7 @@ SWITCH_SCHEDULE: Final = "schedule"
 SWITCH_PREHEAT: Final = "preheat"
 SWITCH_LEARNING: Final = "learning"
 SWITCH_APPLY_LEARNING: Final = "apply_learning"
+SWITCH_OBSERVE: Final = "observe"  # D49: learn, but write nothing
 ROOM_SWITCHES: Final = (
     SWITCH_ADAPTIVE,
     SWITCH_SKIP,
@@ -100,6 +104,7 @@ ROOM_SWITCHES: Final = (
     SWITCH_PREHEAT,
     SWITCH_LEARNING,
     SWITCH_APPLY_LEARNING,
+    SWITCH_OBSERVE,
 )
 # Phase 1 on by default, everything later off so each phase can be enabled one at a time.
 SWITCH_DEFAULTS: Final = {
@@ -110,6 +115,7 @@ SWITCH_DEFAULTS: Final = {
     SWITCH_PREHEAT: False,
     SWITCH_LEARNING: False,
     SWITCH_APPLY_LEARNING: False,
+    SWITCH_OBSERVE: False,  # off for a room whose store has no such key; a brand-new room starts with it on (D49)
 }
 
 NUMBER_SLOPE: Final = "adaptive_slope"

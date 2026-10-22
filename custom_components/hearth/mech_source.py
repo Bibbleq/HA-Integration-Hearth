@@ -4,7 +4,7 @@ When `scheduler_entity_ids` is set, the room's schedule is derived from those HA
 (`switch.schedule_*`) entities instead of the stored blob. Hearth owns preset switching only
 while the room's schedule switch is on and the global switch is on; it then switches the source
 schedules off, and switches them back on whenever it stops owning the room (schedule switch off,
-global switch off, unload, removal). Dormancy (including the global pause) and stand-down are temporary and never hand back.
+global switch off, observe only, unload, removal). Dormancy (including the global pause) and stand-down are temporary and never hand back.
 A source that is switched back on while Hearth owns the room is switched off again (D48).
 """
 
@@ -29,6 +29,7 @@ from .const import (
     CONF_WARM_BY_PRESETS,
     DOMAIN,
     ISSUE_DAY_CONFLICT,
+    ISSUE_NO_PRESET_ENTITIES,
     ISSUE_SHARED_SOURCE,
     ISSUE_SOURCE_ENABLED,
     ISSUE_UNSUPPORTED_ACTION,
@@ -39,7 +40,7 @@ from .core.scheduler_source import Issue, SourceInput, derive_schedule
 
 _LOGGER = logging.getLogger(__name__)
 
-ALL_ISSUES = (ISSUE_DAY_CONFLICT, ISSUE_SHARED_SOURCE, ISSUE_UNSUPPORTED_ACTION, ISSUE_SOURCE_ENABLED)
+ALL_ISSUES = (ISSUE_DAY_CONFLICT, ISSUE_SHARED_SOURCE, ISSUE_UNSUPPORTED_ACTION, ISSUE_SOURCE_ENABLED, ISSUE_NO_PRESET_ENTITIES)
 # What "blocked" means for sensor.<room>_next_block, most important first. source_enabled never blocks.
 BLOCKING_PRIORITY = (ISSUE_SHARED_SOURCE, ISSUE_UNSUPPORTED_ACTION, ISSUE_DAY_CONFLICT)
 _PENDING_STATES = (ConfigEntryState.NOT_LOADED, ConfigEntryState.SETUP_IN_PROGRESS, ConfigEntryState.UNLOAD_IN_PROGRESS)
@@ -360,7 +361,7 @@ class SchedulerSourceMixin:
         if can_take_over and not self._took_over:
             await self._take_over(now)
         elif not can_take_over and self._took_over:
-            await self._hand_back("shared_source" if wanted else "schedule or global switch off")
+            await self._hand_back("shared_source" if wanted else "schedule switch off, observe only or global switch off")
         elif can_take_over and self._took_over and self._retry_reassert_due(now):
             await self._turn_off_enabled_sources()  # a re-assert that failed is retried here
         self._sync_issues(now)

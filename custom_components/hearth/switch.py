@@ -24,6 +24,7 @@ ICONS = {
     "preheat": "mdi:fire",
     "learning": "mdi:notebook-edit",
     "apply_learning": "mdi:school",
+    "observe": "mdi:eye",
 }
 
 
