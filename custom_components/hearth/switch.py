@@ -33,6 +33,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     global_state = hass.data[DOMAIN]["global"]
     if global_state.owner_entry_id == entry.entry_id:
         entities.append(GlobalActiveSwitch(hass))
+        entities.append(GlobalPausedSwitch(hass))
     async_add_entities(entities)
 
 
@@ -62,14 +63,11 @@ class RoomMechanismSwitch(HearthEntity, SwitchEntity):
         self.async_write_ha_state()
 
 
-class GlobalActiveSwitch(SwitchEntity):
-    """switch.hearth_active: the global kill switch (spec section 5)."""
+class _GlobalSwitch(SwitchEntity):
+    """Shared plumbing for the integration-wide switches."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
-    _attr_translation_key = "active"
-    _attr_icon = "mdi:power"
-    _attr_unique_id = f"{DOMAIN}_global_active"
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -87,6 +85,17 @@ class GlobalActiveSwitch(SwitchEntity):
     def _on_update(self) -> None:
         self.async_write_ha_state()
 
+
+class GlobalActiveSwitch(_GlobalSwitch):
+    """switch.hearth_active: the global kill switch (spec section 5)."""
+
+    _attr_translation_key = "active"
+    _attr_icon = "mdi:power"
+    _attr_unique_id = f"{DOMAIN}_global_active"
+    _attr_extra_state_attributes = {
+        "description": "Off hands every room back: Scheduler schedules Hearth had switched off are switched back on, and Hearth stops writing."
+    }
+
     @property
     def is_on(self) -> bool:
         return bool(self.hass.data[DOMAIN]["global"].active)
@@ -96,3 +105,25 @@ class GlobalActiveSwitch(SwitchEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self.hass.data[DOMAIN]["global"].async_set_active(False)
+
+
+class GlobalPausedSwitch(_GlobalSwitch):
+    """switch.hearth_paused: every room dormant, nothing handed back (D45)."""
+
+    _attr_translation_key = "paused"
+    _attr_icon = "mdi:pause-circle"
+    _attr_unique_id = f"{DOMAIN}_global_paused"
+    _attr_extra_state_attributes = {
+        "description": "On leaves every room alone but keeps ownership: Hearth-owned Scheduler schedules stay off and nothing is learnt. "
+        "Off puts every room straight back on its current schedule block. switch.hearth_active off still hands rooms back."
+    }
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self.hass.data[DOMAIN]["global"].paused)
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self.hass.data[DOMAIN]["global"].async_set_paused(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self.hass.data[DOMAIN]["global"].async_set_paused(False)

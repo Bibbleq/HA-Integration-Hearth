@@ -38,24 +38,36 @@ CONFIG_SCHEMA = vol.Schema(
 
 
 class GlobalState:
-    """The global kill switch, persisted independently of any room."""
+    """The global kill switch and pause switch, persisted independently of any room."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
         self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY_GLOBAL)
         self.active = True
+        self.paused = False
         self.owner_entry_id: str | None = None
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
         self.active = bool(data.get("active", True))
+        self.paused = bool(data.get("paused", False))  # a 0.6.x store has no "paused": off
+
+    async def _async_changed(self, reason: str) -> None:
+        await self._store.async_save({"active": self.active, "paused": self.paused})
+        async_dispatcher_send(self.hass, SIGNAL_GLOBAL_UPDATE)
+        for room in list(self.hass.data[DOMAIN]["rooms"].values()):
+            await room.async_evaluate(reason)
 
     async def async_set_active(self, active: bool) -> None:
         self.active = active
-        await self._store.async_save({"active": active})
-        async_dispatcher_send(self.hass, SIGNAL_GLOBAL_UPDATE)
-        for room in list(self.hass.data[DOMAIN]["rooms"].values()):
-            await room.async_evaluate("global_switch")
+        await self._async_changed("global_switch")
+
+    async def async_set_paused(self, paused: bool) -> None:
+        """D45: every room goes dormant (or comes back) without handing any Scheduler source back."""
+        if paused == self.paused:
+            return
+        self.paused = paused
+        await self._async_changed("pause_switch")
 
 
 def _merge_defaults(advanced: dict[str, Any]) -> dict[str, Any]:

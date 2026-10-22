@@ -127,6 +127,9 @@
       "active": {
         "name": "Active"
       },
+      "paused": {
+        "name": "Paused"
+      },
       "adaptive": {
         "name": "Adaptive comfort"
       },

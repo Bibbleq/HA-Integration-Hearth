@@ -168,6 +168,7 @@ DEFAULTS: Final[dict[str, object]] = {
     "learning_safety_factor_bound_pct": 25.0,
     "slope_error_cold_margin": 3.0,  # C below t_ref that counts as "cold" for slope attribution
     "write_log_len": 100,
+    "learn_from_automations": False,  # True: changes made by automations/scripts/Scheduler are learnt from like manual ones (D47)
     # 4.7 forecast subsystem
     "max_forecast_age_hours": 3,
     "forecast_refresh_interval_min": 60,
@@ -178,7 +179,8 @@ DEFAULTS: Final[dict[str, object]] = {
     "forecast_condition_window_end": "14:00",
     # 4.8 Scheduler entities as the schedule source
     "morning_cutoff": "12:00",  # local HH:MM: the first warm-by block before this is skippable
-    "scheduler_enabled_check_s": 120,  # seconds after a take-over before a still-on source raises a repair
+    "scheduler_enabled_check_s": 120,  # seconds after a take-over (or a re-enable) before a still-on source raises a repair
+    "source_reenable_grace_s": 15,  # seconds after a source turns on during which a preset change is the Scheduler's, not a person's (D48)
 }
 
 # Attribute paths on the VTherm climate entity (verified against VTherm 10.4).
@@ -210,6 +212,7 @@ DORMANT_OFF: Final = "off"
 DORMANT_UNAVAILABLE: Final = "unavailable"
 DORMANT_DISABLED: Final = "disabled"
 DORMANT_NO_PRESET_ENTITIES: Final = "no_preset_entities"
+DORMANT_PAUSED: Final = "paused"  # switch.hearth_paused: every room dormant, Scheduler sources stay off (D45)
 
 SKIP_IDLE: Final = "idle"
 SKIP_PREVIEW: Final = "preview"

@@ -45,6 +45,7 @@ from .const import (
     DOMAIN,
     DORMANT_DISABLED,
     DORMANT_NO_PRESET_ENTITIES,
+    DORMANT_PAUSED,
     EVENT_DIAGNOSTIC,
     NUMBER_COLD_MORNING,
     NUMBER_MAX_OFFSET,
@@ -130,6 +131,7 @@ class HearthRoom(SchedulerSourceMixin, TransferMixin, LearningMixin, ScheduleMix
         self.last_external_change: dict[str, Any] | None = None
         self._outdoor_frozen_reported = False
         self._missing_presets_reported = False
+        self._resume_pending = False  # the pause just ended: re-apply the current schedule block once the room is in scope
         self._init_schedule()
         self._init_source()
         self._init_learning()
@@ -180,6 +182,10 @@ class HearthRoom(SchedulerSourceMixin, TransferMixin, LearningMixin, ScheduleMix
     @property
     def global_active(self) -> bool:
         return bool(self.hass.data[DOMAIN]["global"].active)
+
+    @property
+    def global_paused(self) -> bool:
+        return bool(self.hass.data[DOMAIN]["global"].paused)
 
     def enabled(self, key: str) -> bool:
         return self.global_active and self.switch(key)
@@ -413,6 +419,7 @@ class HearthRoom(SchedulerSourceMixin, TransferMixin, LearningMixin, ScheduleMix
         self._sample_outdoor(now)
         self._maybe_roll(now)
         self._update_dormant()
+        self._handle_resume()
         await self._reconcile_source(now)
         await self._evaluate_adaptive(now, force_write)
         await self._evaluate_mechanisms(now, reason)
@@ -426,9 +433,16 @@ class HearthRoom(SchedulerSourceMixin, TransferMixin, LearningMixin, ScheduleMix
         await self._evaluate_schedule(now)
 
     def _update_dormant(self) -> None:
+        reason = self._compute_dormant()
+        if self.dormant_reason == DORMANT_PAUSED and reason != DORMANT_PAUSED:
+            self._resume_pending = True  # D46: leaving the pause is a fresh start, handled in _handle_resume
+        self.dormant_reason = reason
+
+    def _compute_dormant(self) -> str | None:
         if not self.global_active:
-            self.dormant_reason = DORMANT_DISABLED
-            return
+            return DORMANT_DISABLED  # hearth_active off wins over the pause: rooms are handed back
+        if self.global_paused:
+            return DORMANT_PAUSED
         reason = self.snapshot.dormant_reason
         if reason is None and not self.vtherm.has_preset_numbers(self.affected_presets):
             reason = DORMANT_NO_PRESET_ENTITIES
@@ -441,7 +455,23 @@ class HearthRoom(SchedulerSourceMixin, TransferMixin, LearningMixin, ScheduleMix
                 )
         elif reason is None:
             self._missing_presets_reported = False
-        self.dormant_reason = reason
+        return reason
+
+    def _handle_resume(self) -> None:
+        """D46: the pause ended and the room is in scope again.
+
+        Forget the stand-down and the "applied block" memory so this evaluation applies the CURRENT schedule block
+        at once (the schedule's usual "a manual change stands until the next block" rule would otherwise keep
+        whatever the occupancy automations set while Hearth was paused). Adaptive, skip, setback and preheat then
+        follow their normal rules in the same evaluation. Other dormancy (a window, away...) is not a fresh start.
+        """
+        if not self._resume_pending or self.dormant:
+            return
+        self._resume_pending = False
+        if self.standdown_active:
+            self.standdown.clear()
+        self.sched.pop("applied_key", None)
+        self._diagnostic("resumed", "Pause ended: applying the current schedule block")
 
     @property
     def dormant(self) -> bool:
@@ -546,6 +576,7 @@ class HearthRoom(SchedulerSourceMixin, TransferMixin, LearningMixin, ScheduleMix
             "room": self.room_name,
             "vtherm": self.vtherm.entity_id,
             "dormant_reason": self.dormant_reason,
+            "global_paused": self.global_paused,
             "settings": self.settings,
             "running_mean": self.running_mean.to_dict(),
             "comfort": self.comfort.__dict__ if self.comfort else None,
