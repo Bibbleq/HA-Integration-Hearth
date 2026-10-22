@@ -241,3 +241,16 @@ async def test_unload(hass: HomeAssistant, services) -> None:
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
     assert entry.entry_id not in hass.data[DOMAIN]["rooms"]
+
+
+async def test_services_survive_a_reload_of_the_only_room(hass: HomeAssistant, services) -> None:
+    """Unloading the last room removes the services; setting it up again must put them back."""
+    set_vtherm(hass)
+    set_numbers(hass)
+    entry = make_entry()
+    await setup_room(hass, entry)
+    assert hass.services.has_service(DOMAIN, "recompute")
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    for service in ("override", "recompute", "reset_learning", "export_learning", "import_learning", "undo_reset"):
+        assert hass.services.has_service(DOMAIN, service), service

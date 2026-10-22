@@ -130,6 +130,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up one room."""
     if DOMAIN not in hass.data:
         await async_setup(hass, {})
+    async_setup_services(hass)  # idempotent; unloading the last room removes them, so a reload must put them back
     room = HearthRoom(hass, entry)
     hass.data[DOMAIN]["rooms"][entry.entry_id] = room
     global_state: GlobalState = hass.data[DOMAIN]["global"]
