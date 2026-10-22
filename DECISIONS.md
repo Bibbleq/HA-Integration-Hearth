@@ -363,3 +363,13 @@ No repair for a missing or unavailable source: that is a diagnostic event and a 
 and `scheduler_day_conflict` in that priority order; `scheduler_source_enabled` does not block anything, so it
 is not reported there. `derived_at` is the ISO time of the last successful derivation, and is restored from the
 room store after a restart. The room diagnostics download includes a `scheduler_source` block.
+
+## D38. Resetting the warming-rate model
+
+`hearth.reset_learning` takes `bucket: warming_rate`, which clears the warming-rate model (all runs and the
+fit), drops a heating run in progress and the cached preheat plan, and leaves the override ledger alone. Found
+on the first live day: the pilot room's VTherm read its temperature from the radiator valve, the first clean run
+measured about 7 C/h, and swapping in a room sensor left that run in the model with no way to remove it short
+of deleting the room. An empty `bucket` keeps meaning "every ledger bucket" and does not touch the warming rate,
+so existing calls behave as before and a ledger reset never costs a winter of learned preheat. No automatic reset
+on a sensor change: Hearth does not see the VTherm's configuration, only its reported temperature.

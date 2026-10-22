@@ -281,9 +281,36 @@ async def test_override_service_and_reset_learning(hass: HomeAssistant, hass_sto
     await hass.async_block_till_done()
     assert room.ledger.buckets["baseline_error"].events == 0
     room.ledger.buckets["skip_failure"].events = 5
+    # An empty bucket resets every ledger bucket but never the warming-rate model (D38)
+    room.warming_model.add_run(12.5, 2.0)
     await hass.services.async_call(DOMAIN, "reset_learning", {"vtherm_entity_id": VTHERM}, blocking=True)
     await hass.async_block_till_done()
     assert all(b.events == 0 for b in room.ledger.buckets.values())
+    assert room.warming_model.n_runs == 1
+
+
+async def test_reset_learning_warming_rate(hass: HomeAssistant, hass_storage, services, freezer) -> None:
+    """bucket=warming_rate clears the model, the run in progress and the preheat plan, not the ledger (D38)."""
+    today = dt_util.start_of_local_day()
+    await tick(hass, freezer, local(today, 6, 50))
+    seed_store(hass_storage, t_rm=14.0, settings=LEARN)
+    set_vtherm(hass, preset="comfort", current=18.0, target=20.5)
+    set_numbers(hass)
+    room = await setup_room(hass, make_entry())
+    for delta, rate in ((12.5, 6.95), (11.0, 1.2), (13.0, 1.0)):
+        room.warming_model.add_run(delta, rate)
+    assert room.warming_model.a is not None
+    room.ledger.buckets["preheat_shortfall"].events = 3
+    await hass.services.async_call(DOMAIN, "reset_learning", {"vtherm_entity_id": VTHERM, "bucket": "warming_rate"}, blocking=True)
+    await hass.async_block_till_done()
+    assert room.warming_model.n_runs == 0
+    assert room.warming_model.a is None and room.warming_model.b is None
+    assert room.ledger.buckets["preheat_shortfall"].events == 3
+    rate, learned = room.current_warming_rate()
+    assert learned is False and rate == pytest.approx(1.0)
+    # The cleared model is what gets persisted
+    room._dump_schedule_state()
+    assert room.mechanisms["warming"]["runs"] == []
 
 
 async def test_standdown_survives_restart(hass: HomeAssistant, hass_storage, services, freezer) -> None:

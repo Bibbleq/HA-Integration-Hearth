@@ -121,7 +121,7 @@ config-entry diagnostics download.
 | `hearth.recompute` | room (optional), `force` | Force an adaptive recompute and write |
 | `hearth.refresh_forecast` | room (optional) | Fetch the forecast now |
 | `hearth.set_schedule` | room, `schedule` | Replace a room's warm-by schedule (phase 3). Refused for a room that takes its schedule from Scheduler entities |
-| `hearth.reset_learning` | room, `bucket` (optional) | Clear the ledger, or one bucket (phase 4) |
+| `hearth.reset_learning` | room, `bucket` (optional) | Clear the ledger, or one bucket (phase 4). `bucket: warming_rate` instead clears the learned warming rate and any run in progress, back to the 1.0 C/h default; do this after changing the VTherm's temperature sensor. An empty bucket never touches the warming rate |
 
 `room` is either `entry_id` (config entry selector) or `vtherm_entity_id` (the climate entity the room drives).
 

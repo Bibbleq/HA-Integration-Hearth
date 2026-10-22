@@ -296,7 +296,7 @@
     },
     "reset_learning": {
       "name": "Reset learning",
-      "description": "Clear the override ledger for a room, or one attribution bucket.",
+      "description": "Clear the override ledger for a room, or one attribution bucket, or the learned warming rate.",
       "fields": {
         "entry_id": {
           "name": "Room",
@@ -308,7 +308,7 @@
         },
         "bucket": {
           "name": "Bucket",
-          "description": "Leave empty to reset every bucket."
+          "description": "Leave empty to reset every ledger bucket. warming_rate clears the learned warming rate instead (use it after changing the room's temperature sensor); it is never included in an empty reset."
         }
       }
     }

@@ -67,3 +67,4 @@ reset_learning:
             - slope_error
             - skip_failure
             - baseline_error
+            - warming_rate
