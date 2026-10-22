@@ -241,6 +241,10 @@ def _next_block_attrs(room: HearthRoom) -> dict[str, Any]:
         "applied_block": room.sched.get("applied_key"),
         "applied_by": room.sched.get("applied_by"),
         "schedule": room.schedule_model.to_dict(),
+        "schedule_source": room.schedule_source,
+        "source_entities": room.source_ids,
+        "source_blocked_reason": room.source_blocked_reason,
+        "derived_at": room.derived_at.isoformat() if room.derived_at else None,
     }
 
 

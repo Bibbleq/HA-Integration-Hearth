@@ -73,7 +73,9 @@ Then *Settings > Devices & services > Add integration > Hearth*. One Hearth room
 **Tier 2, config entry options** (*Configure* on the integration): target VTherm, room name, weather
 entity, outdoor sensor override, workday sensor, baseline comfort temperature, comfort band min/max (the hard clamps),
 affected presets, baseline boost temperature, solar-gain flag, skip decision / skip end / bedtime decision
-times. The schedule (phase 3) is also stored here, edited via the `hearth.set_schedule` service.
+times. The schedule (phase 3) is also stored here, edited via the `hearth.set_schedule` service, or taken from
+HA Scheduler entities instead (`scheduler_entity_ids`, `warm_by_presets`, `skippable_first_morning`; see
+[Using the Scheduler card as the schedule source](#using-the-scheduler-card-as-the-schedule-source)).
 
 **Tier 3, constants**: everything else lives in one `DEFAULTS` dict in `const.py`. Any key can be
 overridden from `configuration.yaml`:
@@ -103,7 +105,7 @@ Each room is a device named *Hearth \<Room\>*. Diagnostics (read-only):
 | `sensor.hearth_<room>_skip_preview` | Today until the decision time, then tomorrow: likely / unlikely / unknown, with the forecast basis |
 | `sensor.hearth_<room>_setback_status` | idle / active, with the coldest-morning forecast, eco base and target, restore time |
 | `sensor.hearth_<room>_warming_rate` | C/h at the current outdoor temperature, with model constants and run count |
-| `sensor.hearth_<room>_next_block` | Phase 3: "comfort by 06:30, preheat est. 05:52" |
+| `sensor.hearth_<room>_next_block` | Phase 3: "comfort by 06:30, preheat est. 05:52". Attributes include `schedule_source` (`scheduler` / `explicit` / `none`), `source_entities`, `source_blocked_reason` and `derived_at` |
 | `sensor.hearth_<room>_stand_down` | none / until (local timestamp), with cause and the last external change |
 | `sensor.hearth_<room>_learning_<bucket>` | Phase 4: decayed mean bias in C per bucket (`preheat_shortfall`, `slope_error`, `skip_failure`, `baseline_error`) with evidence count and the correction that would apply |
 | `binary_sensor.hearth_<room>_dormant` | On when Hearth is leaving the room alone, with reason (away / central_frost / window / safety / overpowering / off / unavailable / disabled / no_preset_entities) |
@@ -118,7 +120,7 @@ config-entry diagnostics download.
 | `hearth.override` | room, `duration` | Stand Hearth down deliberately ("heat normally for 3 h"). Ends an active skip and restores the preset. Works whether or not override learning is on |
 | `hearth.recompute` | room (optional), `force` | Force an adaptive recompute and write |
 | `hearth.refresh_forecast` | room (optional) | Fetch the forecast now |
-| `hearth.set_schedule` | room, `schedule` | Replace a room's warm-by schedule (phase 3) |
+| `hearth.set_schedule` | room, `schedule` | Replace a room's warm-by schedule (phase 3). Refused for a room that takes its schedule from Scheduler entities |
 | `hearth.reset_learning` | room, `bucket` (optional) | Clear the ledger, or one bucket (phase 4) |
 
 `room` is either `entry_id` (config entry selector) or `vtherm_entity_id` (the climate entity the room drives).
@@ -133,10 +135,11 @@ Phases are meant to soak for a few weeks each. Everything is per room.
    `switch.hearth_<room>_forecast_skip` and/or `switch.hearth_<room>_setback_depth`. Your existing
    HA Scheduler entries stay in charge of presets; a Scheduler slot firing mid-skip ends the skip.
    Check `sensor.hearth_<room>_skip_preview` in the evening and `skip_status` in the morning.
-3. **Schedule and preheat**: set the room's schedule with `hearth.set_schedule`, turn on
-   `switch.hearth_<room>_schedule`, then disable that room's HA Scheduler entries (the only hand-over
-   needed when the TRVs are plain actuators). Once the preset
-   switching looks right, turn on `switch.hearth_<room>_preheat`. The warming-rate model uses a
+3. **Schedule and preheat**: give the room a schedule, then turn on `switch.hearth_<room>_schedule`. Either set an
+   explicit schedule with `hearth.set_schedule` and disable that room's HA Scheduler entries yourself, or point the
+   room at its Scheduler schedules (`scheduler_entity_ids` in the room options) and let Hearth do the hand-over: turn
+   the schedule switch on and Hearth switches the source schedules off itself; turn it off and it switches them back
+   on. Once the preset switching looks right, turn on `switch.hearth_<room>_preheat`. The warming-rate model uses a
    conservative 1.0 C/h until it has five clean heating runs.
 4. **Override learning**: turn on `switch.hearth_<room>_override_learning`. From then on a manual preset
    or temperature change stands Hearth down for that room (until the next schedule block or 180 min) and is
@@ -179,6 +182,61 @@ Saturday's. Without a workday sensor every date follows its weekday.
 preset set by hand stands until the next block like any other manual change. Only VTherm's central
 "Frost protection" mode (holiday) makes Hearth dormant. Eco is the better resting state between
 comfort blocks: recovering from frost can take longer than the 120 minute preheat cap allows.
+
+## Using the Scheduler card as the schedule source
+
+If you already manage heating schedules in the HACS [Scheduler](https://github.com/nielsfaber/scheduler-component)
+component and its card, Hearth can read them instead of keeping a second copy. In the room's options, set
+**Scheduler schedules** (`scheduler_entity_ids`) to the `switch.schedule_*` entities that drive that room.
+
+**What Hearth reads.** Each Scheduler entity carries its whole week in its attributes whether it is on or off:
+`weekdays`, `timeslots` and `actions`. Hearth turns every timeslot start into one block at that time, with the
+preset from the matching action. The slot's stop time is ignored; the next block ends the previous one.
+
+- Every action must be **Set preset** (`climate.set_preset_mode`) with `frost`, `eco`, `comfort` or `boost`.
+  Anything else, and sunrise/sunset slots, make that schedule unusable (see Repairs below).
+- Weekdays can be explicit (`mon`..`sun`) or the Scheduler shorthands `daily`, `workday` and `weekend`.
+- Slots whose preset is in **Presets that count as warm-by** (`warm_by_presets`, default comfort and boost) become
+  `warm_by` blocks, so they get preheat. All other slots are plain `at` blocks.
+- With **First morning block is skippable** (`skippable_first_morning`, default on) the first warm-by block of each
+  day that falls before 12:00 (`morning_cutoff`) is marked `skippable` for the forecast skip.
+- A schedule that covers exactly Saturday and Sunday (or `weekend`) also supplies the `non_workday` blocks used on
+  bank holidays (see Bank holidays under Schedule format).
+- Each day must belong to exactly one schedule. A day no schedule covers has no blocks, so the previous day's last
+  preset carries over.
+
+The Living Room example: `switch.schedule_living_room_weekday` (Mon to Fri: eco, comfort from 06:30, eco from 09:00,
+comfort from 16:00, eco from 22:00) plus `switch.schedule_living_room_weekend` (Sat and Sun) gives a full week, and
+the weekend schedule doubles as the bank-holiday schedule.
+
+**Live updates.** Hearth re-reads the entities on every state or attribute change, so editing a schedule in the
+Scheduler card takes effect immediately, even while Hearth owns the room. If a source goes unavailable or is
+missing, Hearth keeps the last good schedule (it is remembered across restarts) and fires a `hearth_diagnostic`
+event of kind `scheduler_source_missing`. With sources configured, the derived schedule always replaces any stored
+blob, and `hearth.set_schedule` is refused for that room. Clear the option to use an explicit schedule again.
+
+**Hand-over and fallback.** While the room's schedule switch is off, nothing changes: Scheduler keeps running the
+heating and you can read the derived schedule in `sensor.hearth_<room>_next_block` to check it.
+
+- Turning `switch.hearth_<room>_schedule` on (with `switch.hearth_active` on) makes Hearth call `switch.turn_off` on
+  every source schedule. It does the same at startup if the switch was already on.
+- Turning the schedule switch off, turning `switch.hearth_active` off, reloading or unloading the integration, or
+  deleting the room makes Hearth call `switch.turn_on` on every source schedule, so Scheduler is the fallback.
+  Dormancy (window, away, frost, safety) and a stand-down are temporary and do not hand back.
+- Hearth will not take over a schedule that also drives other climate entities unless each of them is a Hearth
+  room with its schedule switch on, because switching it off would stop those rooms. It also will not take over when
+  it has no usable schedule yet. Hearth cannot hand back if the integration files are deleted while it owns a room;
+  turn the schedules back on in the Scheduler card in that case.
+
+**Repairs.** Hearth raises these in *Settings > Repairs* and clears them when the cause goes away. A missing or
+unavailable source is only a diagnostic event and a log line.
+
+| Repair | Meaning |
+|---|---|
+| `scheduler_day_conflict` | Two source schedules cover the same day. Hearth does not apply the change and keeps the last good schedule |
+| `scheduler_shared_source` | A source also drives climate entities that are not Hearth rooms with the schedule switch on. Hearth does not take it over or apply it |
+| `scheduler_unsupported_action` | A slot is not a preset change (or has a sunrise/sunset time). That schedule is unusable and the change is not applied |
+| `scheduler_source_enabled` | A source schedule is still on two minutes after Hearth took the room over, so two systems may be changing presets. Turn it off, or hand the room back |
 
 ## Safety behaviour
 

@@ -19,13 +19,17 @@ from .const import (
     CONF_BOOST_BASE_TEMP,
     CONF_OUTDOOR_SENSOR,
     CONF_ROOM_NAME,
+    CONF_SCHEDULER_ENTITIES,
     CONF_SKIP_DECISION_TIME,
     CONF_SKIP_END_TIME,
+    CONF_SKIPPABLE_FIRST_MORNING,
     CONF_SOLAR_GAIN,
     CONF_VTHERM,
+    CONF_WARM_BY_PRESETS,
     CONF_WEATHER,
     CONF_WORKDAY,
     DOMAIN,
+    SCHEDULE_PRESETS,
     TIER2_DEFAULTS,
 )
 
@@ -54,6 +58,18 @@ def _tier2_schema(current: dict[str, Any]) -> vol.Schema:
             vol.Optional(CONF_WORKDAY, description={"suggested_value": current.get(CONF_WORKDAY)}): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="binary_sensor", integration="workday")
             ),
+            vol.Optional(
+                CONF_SCHEDULER_ENTITIES, description={"suggested_value": current.get(CONF_SCHEDULER_ENTITIES)}
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="switch", integration="scheduler", multiple=True)),
+            vol.Required(CONF_WARM_BY_PRESETS, default=list(get(CONF_WARM_BY_PRESETS))): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=list(SCHEDULE_PRESETS),
+                    multiple=True,
+                    translation_key="warm_by_presets",
+                    mode=selector.SelectSelectorMode.LIST,
+                )
+            ),
+            vol.Required(CONF_SKIPPABLE_FIRST_MORNING, default=bool(get(CONF_SKIPPABLE_FIRST_MORNING))): selector.BooleanSelector(),
             vol.Required(CONF_BASE_TEMP, default=get(CONF_BASE_TEMP)): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=10, max=30, step=0.5, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX)
             ),
@@ -99,7 +115,7 @@ def _normalise(user_input: dict[str, Any]) -> dict[str, Any]:
     for key in (CONF_SKIP_DECISION_TIME, CONF_SKIP_END_TIME, CONF_BEDTIME_DECISION_TIME):
         if key in out:
             out[key] = _time_store(out[key])
-    for key in (CONF_WEATHER, CONF_OUTDOOR_SENSOR, CONF_WORKDAY):
+    for key in (CONF_WEATHER, CONF_OUTDOOR_SENSOR, CONF_WORKDAY, CONF_SCHEDULER_ENTITIES):
         if key in out and not out[key]:
             out.pop(key)
     return out
@@ -158,7 +174,7 @@ class HearthOptionsFlow(OptionsFlow):
             errors = _validate(user_input)
             if not errors:
                 options = {**self.config_entry.options, **_normalise(user_input)}
-                for key in (CONF_WEATHER, CONF_OUTDOOR_SENSOR, CONF_WORKDAY):
+                for key in (CONF_WEATHER, CONF_OUTDOOR_SENSOR, CONF_WORKDAY, CONF_SCHEDULER_ENTITIES):
                     if key not in user_input or not user_input.get(key):
                         options.pop(key, None)
                 return self.async_create_entry(title="", data=options)
