@@ -290,6 +290,11 @@ class ScheduleMixin:
     # ------------------------------------------------------------- services
 
     async def async_service_set_schedule(self, schedule: dict) -> None:
+        if sources := self.source_ids:
+            raise ServiceValidationError(
+                f"{self.room_name} is driven by Scheduler entities ({', '.join(sources)}). "
+                "Clear the Scheduler entities option in the room settings to use an explicit schedule."
+            )
         try:
             parsed = Schedule.parse(schedule)
         except ScheduleError as err:

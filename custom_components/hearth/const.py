@@ -13,6 +13,20 @@ from __future__ import annotations
 
 from typing import Final
 
+from .core.scheduler_source import (
+    ISSUE_DAY_CONFLICT,
+    ISSUE_SHARED_SOURCE,
+    ISSUE_SOURCE_ENABLED,
+    ISSUE_UNSUPPORTED_ACTION,
+)
+
+__all__ = [
+    "ISSUE_DAY_CONFLICT",
+    "ISSUE_SHARED_SOURCE",
+    "ISSUE_SOURCE_ENABLED",
+    "ISSUE_UNSUPPORTED_ACTION",
+]
+
 DOMAIN: Final = "hearth"
 STORAGE_VERSION: Final = 1
 STORAGE_KEY_ROOM: Final = "hearth.room"
@@ -35,6 +49,9 @@ CONF_SKIP_END_TIME: Final = "skip_end_time"
 CONF_BEDTIME_DECISION_TIME: Final = "bedtime_decision_time"
 CONF_SCHEDULE: Final = "schedule"
 CONF_WORKDAY: Final = "workday_entity_id"
+CONF_SCHEDULER_ENTITIES: Final = "scheduler_entity_ids"
+CONF_WARM_BY_PRESETS: Final = "warm_by_presets"
+CONF_SKIPPABLE_FIRST_MORNING: Final = "skippable_first_morning"
 
 PRESET_COMFORT: Final = "comfort"
 PRESET_BOOST: Final = "boost"
@@ -45,6 +62,7 @@ PRESET_SAFETY: Final = "safety"
 PRESET_POWER: Final = "power"
 PRESET_ACTIVITY: Final = "activity"
 AFFECTABLE_PRESETS: Final = (PRESET_COMFORT, PRESET_BOOST)
+SCHEDULE_PRESETS: Final = (PRESET_FROST, PRESET_ECO, PRESET_COMFORT, PRESET_BOOST)
 
 TIER2_DEFAULTS: Final = {
     CONF_BASE_TEMP: 20.5,
@@ -56,6 +74,8 @@ TIER2_DEFAULTS: Final = {
     CONF_SKIP_DECISION_TIME: "06:45",
     CONF_SKIP_END_TIME: "16:30",
     CONF_BEDTIME_DECISION_TIME: "21:30",
+    CONF_WARM_BY_PRESETS: [PRESET_COMFORT, PRESET_BOOST],
+    CONF_SKIPPABLE_FIRST_MORNING: True,
 }
 
 # ------------------------------------------------------------- Tier 1 entity defaults
@@ -156,6 +176,9 @@ DEFAULTS: Final[dict[str, object]] = {
     "forecast_morning_end": "09:00",
     "forecast_condition_window_start": "08:00",
     "forecast_condition_window_end": "14:00",
+    # 4.8 Scheduler entities as the schedule source
+    "morning_cutoff": "12:00",  # local HH:MM: the first warm-by block before this is skippable
+    "scheduler_enabled_check_s": 120,  # seconds after a take-over before a still-on source raises a repair
 }
 
 # Attribute paths on the VTherm climate entity (verified against VTherm 10.4).

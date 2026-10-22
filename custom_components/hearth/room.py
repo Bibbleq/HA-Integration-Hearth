@@ -58,6 +58,7 @@ from .const import (
     STORAGE_VERSION,
     SWITCH_ADAPTIVE,
     SWITCH_DEFAULTS,
+    SWITCH_SCHEDULE,
     TIER2_DEFAULTS,
 )
 from .core.comfort import ComfortResult, RunningMeanState, RunningMeanTracker, comfort_target, seed_running_mean
@@ -66,6 +67,7 @@ from .mech_learning import LearningMixin
 from .mech_schedule import ScheduleMixin
 from .mech_setback import SetbackMixin
 from .mech_skip import SkipMixin
+from .mech_source import SchedulerSourceMixin
 from .seed import async_daily_means
 from .vtherm import ClampViolation, VThermAdapter, VThermSnapshot
 
@@ -90,7 +92,7 @@ def parse_hhmm(value: str, fallback: str) -> time:
     return time(0, 0)
 
 
-class HearthRoom(LearningMixin, ScheduleMixin, SkipMixin, SetbackMixin):
+class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, SetbackMixin):
     """Controller for one VTherm.
 
     Mixin order matters: a later phase's mixin overrides the hooks of an earlier one.
@@ -128,6 +130,7 @@ class HearthRoom(LearningMixin, ScheduleMixin, SkipMixin, SetbackMixin):
         self._outdoor_frozen_reported = False
         self._missing_presets_reported = False
         self._init_schedule()
+        self._init_source()
         self._init_learning()
 
     # ------------------------------------------------------------- config access
@@ -183,6 +186,8 @@ class HearthRoom(LearningMixin, ScheduleMixin, SkipMixin, SetbackMixin):
         self.settings[key] = value
         self._schedule_save()
         await self.async_evaluate("setting")
+        if key == SWITCH_SCHEDULE:
+            await self._reconcile_peers()  # rooms sharing a Scheduler source depend on this switch
 
     # ------------------------------------------------------------- lifecycle
 
@@ -198,7 +203,10 @@ class HearthRoom(LearningMixin, ScheduleMixin, SkipMixin, SetbackMixin):
         roll = parse_hhmm(self.const("daily_recompute_time"), "00:10")
         self._unsubs.append(self._track_time(self._on_tick, roll.hour, roll.minute, 0))
         self._register_time_triggers()
+        self._subscribe_sources()
         await self.async_evaluate("setup")
+        self.ready = True
+        await self._reconcile_peers()
 
     def _register_time_triggers(self) -> None:
         """Exact-time triggers for decision times, plus forecast prefetch 15 min before each."""
@@ -240,6 +248,7 @@ class HearthRoom(LearningMixin, ScheduleMixin, SkipMixin, SetbackMixin):
             unsub()
         self._unsubs.clear()
         self._stop_schedule_timer()
+        await self.async_source_unload()
         await self._store.async_save(self._data_to_save())
 
     # ------------------------------------------------------------- persistence
@@ -258,13 +267,16 @@ class HearthRoom(LearningMixin, ScheduleMixin, SkipMixin, SetbackMixin):
         self.last_external_change_at = _dt(data.get("last_external_change_at"))
         self.last_external_change = data.get("last_external_change")
         self._load_mechanisms()
+        self.settings_loaded = True
 
     def _load_mechanisms(self) -> None:
         self._load_schedule_state()
+        self._load_source_state()
         self._load_learning_state()
 
     def _dump_mechanisms(self) -> dict:
         self._dump_schedule_state()
+        self._dump_source_state()
         self._dump_learning_state()
         return dict(self.mechanisms)
 
@@ -397,6 +409,7 @@ class HearthRoom(LearningMixin, ScheduleMixin, SkipMixin, SetbackMixin):
         self._sample_outdoor(now)
         self._maybe_roll(now)
         self._update_dormant()
+        await self._reconcile_source(now)
         await self._evaluate_adaptive(now, force_write)
         await self._evaluate_mechanisms(now, reason)
         self.last_evaluated = now
@@ -540,6 +553,7 @@ class HearthRoom(LearningMixin, ScheduleMixin, SkipMixin, SetbackMixin):
             "forecast_fresh": self.forecast_fresh(dt_util.utcnow()),
             "standdown": self.standdown.to_dict(),
             "ledger": self.ledger.to_dict(),
+            "scheduler_source": self.source_diagnostics(),
         }
 
 

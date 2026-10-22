@@ -27,7 +27,10 @@
           "skip_decision_time": "Skip decision time",
           "skip_end_time": "Skip end time",
           "bedtime_decision_time": "Bedtime decision time",
-          "workday_entity_id": "Workday sensor"
+          "workday_entity_id": "Workday sensor",
+          "scheduler_entity_ids": "Scheduler schedules (schedule source)",
+          "warm_by_presets": "Presets that count as warm-by",
+          "skippable_first_morning": "First morning block is skippable"
         },
         "data_description": {
           "weather_entity_id": "Optional. Leave empty to share another room's weather entity or the first one in Home Assistant.",
@@ -41,7 +44,10 @@
           "skip_decision_time": "When the morning forecast-skip decision is taken.",
           "skip_end_time": "When an active skip ends and the schedule preset is restored.",
           "bedtime_decision_time": "When the cold-morning setback decision is taken.",
-          "workday_entity_id": "Optional. A Workday integration sensor. On a Monday to Friday that is not a workday (bank holiday), the schedule uses its non_workday blocks, or Saturday's if it has none."
+          "workday_entity_id": "Optional. A Workday integration sensor. On a Monday to Friday that is not a workday (bank holiday), the schedule uses its non_workday blocks, or Saturday's if it has none.",
+          "scheduler_entity_ids": "Optional. Scheduler component schedules (switch.schedule_*) that define this room's weekly schedule. When set, Hearth derives the schedule from them and hearth.set_schedule is refused for this room. When the room's schedule switch is on, Hearth switches these schedules off itself and switches them back on when it stops driving the room.",
+          "warm_by_presets": "Slots that set one of these presets become warm-by blocks (with preheat); the rest switch at their start time.",
+          "skippable_first_morning": "The first warm-by block of each day before the morning cutoff (12:00) may be suppressed by the forecast skip."
         }
       }
     },
@@ -70,7 +76,10 @@
           "skip_decision_time": "Skip decision time",
           "skip_end_time": "Skip end time",
           "bedtime_decision_time": "Bedtime decision time",
-          "workday_entity_id": "Workday sensor"
+          "workday_entity_id": "Workday sensor",
+          "scheduler_entity_ids": "Scheduler schedules (schedule source)",
+          "warm_by_presets": "Presets that count as warm-by",
+          "skippable_first_morning": "First morning block is skippable"
         },
         "data_description": {
           "weather_entity_id": "Optional. Leave empty to share another room's weather entity or the first one in Home Assistant.",
@@ -84,7 +93,10 @@
           "skip_decision_time": "When the morning forecast-skip decision is taken.",
           "skip_end_time": "When an active skip ends and the schedule preset is restored.",
           "bedtime_decision_time": "When the cold-morning setback decision is taken.",
-          "workday_entity_id": "Optional. A Workday integration sensor. On a Monday to Friday that is not a workday (bank holiday), the schedule uses its non_workday blocks, or Saturday's if it has none."
+          "workday_entity_id": "Optional. A Workday integration sensor. On a Monday to Friday that is not a workday (bank holiday), the schedule uses its non_workday blocks, or Saturday's if it has none.",
+          "scheduler_entity_ids": "Optional. Scheduler component schedules (switch.schedule_*) that define this room's weekly schedule. When set, Hearth derives the schedule from them and hearth.set_schedule is refused for this room. When the room's schedule switch is on, Hearth switches these schedules off itself and switches them back on when it stops driving the room.",
+          "warm_by_presets": "Slots that set one of these presets become warm-by blocks (with preheat); the rest switch at their start time.",
+          "skippable_first_morning": "The first warm-by block of each day before the morning cutoff (12:00) may be suppressed by the forecast skip."
         }
       }
     },
@@ -97,6 +109,14 @@
   "selector": {
     "affected_presets": {
       "options": {
+        "comfort": "Comfort",
+        "boost": "Boost"
+      }
+    },
+    "warm_by_presets": {
+      "options": {
+        "frost": "Frost",
+        "eco": "Eco",
         "comfort": "Comfort",
         "boost": "Boost"
       }
@@ -258,7 +278,7 @@
     },
     "set_schedule": {
       "name": "Set schedule",
-      "description": "Replace a room's warm-by schedule.",
+      "description": "Replace a room's warm-by schedule. Refused for a room that takes its schedule from Scheduler entities.",
       "fields": {
         "entry_id": {
           "name": "Room",
@@ -291,6 +311,24 @@
           "description": "Leave empty to reset every bucket."
         }
       }
+    }
+  },
+  "issues": {
+    "scheduler_day_conflict": {
+      "title": "Two Scheduler schedules claim the same day",
+      "description": "Hearth room {room} takes its schedule from Scheduler schedules, but more than one of them covers the same day ({detail}): {entities}. Hearth is not applying the change. Make each weekday belong to exactly one schedule, or remove one from the room's Scheduler schedules option."
+    },
+    "scheduler_shared_source": {
+      "title": "A Scheduler schedule also drives rooms not on Hearth",
+      "description": "Hearth room {room} will not take over {entities} because it also controls other climate entities that are not Hearth rooms with their schedule switch on ({detail}). Hearth has not switched it off and is not applying it. Split the schedule in the Scheduler card so each schedule only targets Hearth rooms, or turn on the schedule switch for those rooms."
+    },
+    "scheduler_unsupported_action": {
+      "title": "A Scheduler slot is not a preset change",
+      "description": "Hearth room {room} cannot follow {entities}: {detail}. Hearth only follows slots that use the climate.set_preset_mode action with frost, eco, comfort or boost. Hearth is not applying the change."
+    },
+    "scheduler_source_enabled": {
+      "title": "A Scheduler schedule is still on",
+      "description": "Hearth took over room {room} but {entities} is still on, so Scheduler and Hearth may both be changing presets. Turn it off, or turn off the room's Hearth schedule switch to hand the room back to Scheduler."
     }
   }
 }

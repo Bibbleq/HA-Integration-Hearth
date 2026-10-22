@@ -17,6 +17,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import CONF_WEATHER, DEFAULTS, DOMAIN, SIGNAL_GLOBAL_UPDATE, STORAGE_KEY_GLOBAL, STORAGE_VERSION
 from .forecast import ForecastManager
+from .mech_source import async_remove_source_entry
 from .room import HearthRoom
 from .services import async_setup_services, async_unload_services
 
@@ -158,6 +159,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             async_unload_services(hass)
             hass.data[DOMAIN]["forecast"].async_stop()
     return ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Room deleted: give the source Scheduler schedules back to Scheduler."""
+    await async_remove_source_entry(hass, entry)
 
 
 @callback

@@ -5,7 +5,8 @@
     "recorder",
     "climate",
     "weather",
-    "number"
+    "number",
+    "scheduler"
   ],
   "codeowners": [
     "@Bibbleq"
@@ -17,5 +18,5 @@
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/Bibbleq/HA-Integration-Hearth/issues",
   "requirements": [],
-  "version": "0.5.0"
+  "version": "0.6.0"
 }
