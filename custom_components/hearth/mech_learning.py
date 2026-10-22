@@ -14,7 +14,7 @@ from typing import Any
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util import dt as dt_util
 
-from .const import PRESET_NONE, SWITCH_APPLY_LEARNING, SWITCH_LEARNING
+from .const import PRESET_NONE, RESET_WARMING_RATE, SWITCH_APPLY_LEARNING, SWITCH_LEARNING
 from .core.override import (
     BUCKET_BASELINE,
     BUCKET_PREHEAT,
@@ -258,10 +258,20 @@ class LearningMixin:
         await self.async_evaluate("override_service")
 
     async def async_service_reset_learning(self, bucket: str | None) -> None:
-        if bucket is not None and bucket not in BUCKETS:
-            raise ServiceValidationError(f"Unknown bucket {bucket!r}; expected one of {', '.join(BUCKETS)}")
-        self.ledger.reset(bucket)
-        self._diagnostic("reset_learning", f"Ledger reset ({bucket or 'all buckets'})")
+        valid = (*BUCKETS, RESET_WARMING_RATE)
+        if bucket is not None and bucket not in valid:
+            raise ServiceValidationError(f"Unknown bucket {bucket!r}; expected one of {', '.join(valid)}")
+        if bucket == RESET_WARMING_RATE:
+            # D38: the warming-rate model is not a ledger bucket. Clear it, drop any run in progress
+            # (it was measured against the same sensor) and the cached preheat plan.
+            runs = self.warming_model.n_runs
+            self.warming_model.reset()
+            self.heating_run = None
+            self.preheat_plan = None
+            self._diagnostic("reset_learning", f"Warming-rate model reset ({runs} runs discarded)")
+        else:
+            self.ledger.reset(bucket)
+            self._diagnostic("reset_learning", f"Ledger reset ({bucket or 'all buckets'})")
         self._schedule_save()
         await self.async_evaluate("reset_learning")
 

@@ -105,6 +105,8 @@ real Versatile Thermostat or a real weather integration:
   sensor for bank holidays (D30). Verify on the live system that `specific_states.last_central_mode`
   reads `Frost protection` when you set central frost, and that the workday sensor's `check_date`
   service answers for future dates.
+- **0.6.1**: `hearth.reset_learning` with `bucket: warming_rate` clears the learned warming rate (D38). Use it
+  after pointing a VTherm at a different temperature sensor.
 - **0.6.0**: Scheduler entities as a room's schedule source, with automatic take-over and fallback
   (D31-D37). New Tier 2 options `scheduler_entity_ids`, `warm_by_presets`, `skippable_first_morning`; four
   Repairs (`scheduler_day_conflict`, `scheduler_shared_source`, `scheduler_unsupported_action`,
