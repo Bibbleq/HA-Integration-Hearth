@@ -240,3 +240,126 @@ two days ahead (cached per date in the room store). A Mon-Fri date that is not a
 schedule's `non_workday` blocks, or Saturday's when there are none. Weekends always use their own blocks.
 A failed lookup is not cached and is retried next tick; today falls back to the sensor's state; anything
 else unknown follows its weekday.
+
+## D31. Scheduler entities as a room's schedule source (0.6.0)
+
+Ben keeps his heating schedules in the HACS Scheduler component, so a room can take its schedule from those
+`switch.schedule_*` entities instead of a blob stored by `hearth.set_schedule`. Three Tier 2 options, in
+`_tier2_schema`, so both the config flow `settings` step and the options flow `init` step offer them:
+
+| Option | Selector | Default |
+|---|---|---|
+| `scheduler_entity_ids` | entity, domain `switch`, integration `scheduler`, multiple | none (feature off) |
+| `warm_by_presets` | select, multiple, frost / eco / comfort / boost | `[comfort, boost]` |
+| `skippable_first_morning` | boolean | true |
+
+Tier 3 gains `morning_cutoff: "12:00"`. Hearth reads the entities' state attributes, which carry the whole
+week whether the switch is on or off (verified against scheduler-component v3.3.8, `switch.py`
+`state_attributes`): `weekdays`, `timeslots` (`"HH:MM:SS - HH:MM:SS"`, or `"HH:MM:SS"` with no stop) and
+`actions` (aligned 1:1 with the timeslots). The `current_slot`, `next_slot` and `next_trigger` attributes are
+not used; they are None while the switch is off. The derivation is pure logic in `core/scheduler_source.py`.
+
+## D32. Derivation rules
+
+1. Weekday shorthands expand: `daily` is all seven days, `workday` is Mon-Fri, `weekend` is Sat+Sun.
+2. Each timeslot start becomes one block at that HH:MM; the stop time is ignored (the next block ends the
+   previous one). Blocks are sorted by time within a day. `"00:00:00 - 00:00:00"` and
+   `"22:00:00 - 00:00:00"` need no special case: they are blocks at 00:00 and 22:00.
+3. The preset comes from the aligned action, which must be `climate.set_preset_mode` with a preset in
+   frost / eco / comfort / boost (the action data key may be `data` or `service_data`). Any other action makes
+   the entity unusable.
+4. A block whose preset is in `warm_by_presets` is a `warm_by` block, all others are `at` blocks. With
+   `skippable_first_morning`, the first warm-by block of each day is `skippable` when its time is before
+   `morning_cutoff` (so a day whose first warm-by block is 13:00 has no skippable block).
+5. An entity whose expanded weekday set is exactly {sat, sun} (including the `weekend` shorthand) also supplies
+   the `non_workday` blocks that 0.5.0 already uses for bank holidays. Without one, the existing fallback to
+   Saturday applies.
+6. Two entities covering the same day is a conflict. The conflicted days are left out and the derivation is
+   not applied. An entity listing the same day twice (`["mon", "daily"]`) is not a conflict.
+7. A day no entity covers has no blocks, so the previous day's last preset carries over (existing model).
+
+Decided beyond the brief, all reported as `scheduler_unsupported_action` with a detail line rather than adding
+repair keys: unrecognised weekday names, empty or misaligned `timeslots`/`actions`, two slots starting at the
+same time (the Schedule model forbids duplicate block times), and slots that start at sunrise or sunset
+(Hearth needs a fixed clock time). Consecutive slots with the same preset are kept as separate blocks, literally
+one block per slot.
+
+## D33. Precedence, live updates and keeping the last good schedule
+
+When `scheduler_entity_ids` is non-empty the derived schedule replaces the stored `schedule` option, on entry
+setup and whenever any source's state or attributes change (`async_track_state_change_event`). It is held in
+memory and in the room store, never written to the config entry options: an options write would trigger the
+update listener and reload the entry on every Scheduler edit.
+
+- A source that is unavailable, unknown, missing or not yet carrying attributes leaves the last good schedule
+  in force and fires a `scheduler_source_missing` diagnostic event once per outage. The last good schedule is
+  also kept in the room store (keyed to the source list), so a restart while Scheduler is not up still has a
+  schedule. A source that appears later is picked up on its first state event.
+- A derivation that fails (`scheduler_day_conflict`, `scheduler_unsupported_action`) is not applied; the last
+  good schedule stays in force and the repair explains why. With no last good schedule the room's schedule is
+  empty.
+- `hearth.set_schedule` on a room with sources raises `ServiceValidationError` naming the room and its
+  Scheduler entities. Rooms without sources are unchanged.
+- `scheduler` is added to manifest `after_dependencies` so the entities exist before Hearth parses at startup.
+  Hearth copes if they do not.
+
+## D34. Take-over and fallback
+
+Ownership is "the room's schedule switch is on and the global `switch.hearth_active` is on", the existing
+`enabled(SWITCH_SCHEDULE)`. It is reconciled on every evaluation as a transition on an in-memory flag, so
+nothing is re-asserted every tick (a user who turns a source back on is told via a repair, not fought).
+
+- Not owned to owned: `switch.turn_off` on every source that exists. This also runs at entry setup when the
+  switch was already on, which makes the sources off idempotently after a restart.
+- Owned to not owned (schedule switch off, global switch off), entry unload, and entry removal:
+  `switch.turn_on` on every source. Dormancy and stand-down are temporary states the schedule already handles
+  by not writing, so they never hand back.
+- Hearth does not take over until it has a usable schedule (a good derivation exists). Switching the sources
+  off with nothing to replace them would leave the room with no schedule.
+- On unload Hearth hands back only if it took over in this session; a source the user had deliberately turned off
+  while Hearth never owned the room is left alone. On entry removal it turns the sources on regardless, because
+  Hearth is gone and the Scheduler schedules are the fallback. An options change reloads the entry, so it hands
+  back and then takes over again.
+- One service call per entity. A failed call is logged and retried at the next evaluation.
+- Hearth cannot hand back when the integration files are deleted while it owns a room (documented in the README).
+
+## D35. Shared-source guard
+
+Before taking over, Hearth reads each source's `entities` attribute. Every `climate.*` entity in it other than
+the room's own VTherm must be a Hearth room whose schedule switch is effectively on (`enabled`). Otherwise the
+room does not take over, does not apply the derived schedule (its schedule is empty), and raises
+`scheduler_shared_source`. If the guard starts failing after a take-over (another room is added to the schedule
+in the card, or a peer room's schedule switch goes off) Hearth hands back, because the other room needs the
+schedule.
+
+- A peer Hearth room that has not finished loading (config entry not loaded, loading or unloading) is "pending":
+  no take-over yet, but no repair either. Each room re-evaluates the other source-driven rooms when it finishes
+  setting up and when its schedule switch changes, so the order rooms load in does not matter.
+- A source whose `entities` attribute does not include the room's VTherm is logged as a warning and used anyway.
+- The guard only applies while the room wants to take over. With the switch off the derived schedule is shown
+  (to check it) and nothing is touched.
+
+## D36. Repairs
+
+Four issues via `homeassistant.helpers.issue_registry`, warning severity, not fixable, id `<key>_<entry_id>`,
+strings in `strings.json` and `translations/en.json` under `issues`, created and deleted as the condition comes
+and goes, and all cleared on unload and removal:
+
+- `scheduler_day_conflict`: placeholders `room`, `entities`, `detail` (the conflicting days).
+- `scheduler_shared_source`: `entities` are the sources, `detail` the other climate entities.
+- `scheduler_unsupported_action`: `entities` is the unusable schedule, `detail` says why.
+- `scheduler_source_enabled`: a source is still on `scheduler_enabled_check_s` (Tier 3, default 120) seconds
+  after Hearth took over. Checked by a one-shot timer and on every source state change; `entities` lists every
+  offender. One issue per room, with all entity ids in the description. It clears when the source goes off or
+  the room is handed back.
+
+No repair for a missing or unavailable source: that is a diagnostic event and a log line, as elsewhere.
+
+## D37. Next-block sensor attributes
+
+`sensor.hearth_<room>_next_block` gains `schedule_source` (`scheduler` when sources are configured, otherwise
+`explicit` when a stored schedule exists, otherwise `none`), `source_entities`, `source_blocked_reason` and
+`derived_at`. `source_blocked_reason` is None or one of `scheduler_shared_source`, `scheduler_unsupported_action`
+and `scheduler_day_conflict` in that priority order; `scheduler_source_enabled` does not block anything, so it
+is not reported there. `derived_at` is the ISO time of the last successful derivation, and is restored from the
+room store after a restart. The room diagnostics download includes a `scheduler_source` block.

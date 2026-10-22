@@ -6,7 +6,7 @@ Python 3.14, hassfest, and HACS validation.
 
 | Check | State |
 |---|---|
-| pytest (176 tests: 121 pure-core, 55 HA-level) | green on CI |
+| pytest (289 tests at 0.6.0: 186 pure-core, 103 HA-level) | green on CI |
 | hassfest | green |
 | HACS validation | strict since the repo went public (see D18) |
 
@@ -91,9 +91,10 @@ real Versatile Thermostat or a real weather integration:
 7. **Chattiness.** The room store is written at most every 30 s while VTherm attributes change. Watch
    `.storage/hearth.room.*` size and consider recorder excludes for the Hearth diagnostic sensors if the
    attributes are noisy in history.
-8. **Before phase 3 on a room**: disable that room's HA Scheduler entries (Tado is already a flat-temperature
-   actuator with no early start, so nothing to change there), set the schedule with `hearth.set_schedule`,
-   then turn on the schedule switch and check `sensor.hearth_<room>_next_block`.
+8. **Before phase 3 on a room**: either set the schedule with `hearth.set_schedule` and disable that room's HA
+   Scheduler entries yourself, or (0.6.0) point the room at its Scheduler entities and let Hearth switch them off
+   when the schedule switch goes on (Tado is already a flat-temperature actuator with no early start, so nothing
+   to change there). Then check `sensor.hearth_<room>_next_block`.
 9. **HACS install path**: add the repo in HACS as a custom repository (category Integration), or copy
    `custom_components/hearth` manually.
 
@@ -104,14 +105,35 @@ real Versatile Thermostat or a real weather integration:
   sensor for bank holidays (D30). Verify on the live system that `specific_states.last_central_mode`
   reads `Frost protection` when you set central frost, and that the workday sensor's `check_date`
   service answers for future dates.
+- **0.6.0**: Scheduler entities as a room's schedule source, with automatic take-over and fallback
+  (D31-D37). New Tier 2 options `scheduler_entity_ids`, `warm_by_presets`, `skippable_first_morning`; four
+  Repairs (`scheduler_day_conflict`, `scheduler_shared_source`, `scheduler_unsupported_action`,
+  `scheduler_source_enabled`); new `next_block` attributes. Tests: 289 (was 185): 62 new pure-core and 42 new
+  HA-level. Verify on the live system:
+  1. Set `scheduler_entity_ids` on one room to its `switch.schedule_*` entities (schedule switch still off) and
+     read `sensor.hearth_<room>_next_block`: `schedule_source` is `scheduler`, `source_blocked_reason` is empty
+     and the `schedule` attribute matches the Scheduler card, with the first morning block `skippable`. Check
+     the weekend schedule also appears as `non_workday`.
+  2. Real Scheduler attribute shape: confirm `actions` entries read `service` / `data.preset_mode` for these
+     entities (the derivation also accepts `service_data`), and that a slot with a single-time `timeslots`
+     string (no stop) behaves.
+  3. Turn the room's schedule switch on: both source switches go off within a second and no Repair appears
+     after two minutes. Turn it off: both come back on. Do the same with `switch.hearth_active`.
+  4. Edit a slot in the Scheduler card while Hearth owns the room: the schedule updates without a reload and
+     the sources stay off.
+  5. A source that also targets a non-Hearth climate entity raises `scheduler_shared_source` and is left on.
+  6. Restart Home Assistant with the schedule switch on: the sources are off again after startup, and a
+     restart with Scheduler not yet loaded keeps using the last derived schedule.
+  7. Removing the Hearth room (or unloading the integration) turns the source schedules back on.
+  8. hassfest and HACS validation accept `scheduler` (a custom integration, not core) in `after_dependencies`.
 
 ## Known gaps and follow-ups
 
 - The options flow does not edit the schedule (by design in v1); `hearth.set_schedule` and YAML are the
   editors. A schedule editor UI would be a later addition.
 - `switch.hearth_active` belongs to the first-loaded config entry (D3).
-- No repair issues are raised (only `hearth_diagnostic` events and log lines). A repair for the missing
-  preset numbers would be a natural addition.
+- Repairs are raised only for the Scheduler source (0.6.0). Everything else is `hearth_diagnostic` events
+  and log lines; a repair for the missing preset numbers would be a natural addition.
 - Local development: HA 2026.9 needs Python 3.14.2. The core tests run under any Python 3.11+. A
   Python 3.13 venv with `pytest-homeassistant-custom-component==0.13.316` (HA 2026.2) was used for local
   runs during the build and behaved identically except for the lingering-timer check, which is stricter in
