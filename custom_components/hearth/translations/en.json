@@ -376,7 +376,7 @@
   "issues": {
     "no_preset_entities": {
       "title": "VTherm has no preset temperature numbers",
-      "description": "Hearth room {room} cannot control {vtherm}: it has no number.<vtherm>_preset_<preset>_temp entities, so Hearth is leaving the room alone. In the VTherm's configuration, untick 'use central configuration' for preset temperatures. VTherm then creates the numbers at 7 C, so set them to the room's real preset temperatures before Hearth takes over. Until then you can keep the room on Observe only, which needs no numbers."
+      "description": "Hearth room {room} cannot control {vtherm}: it has no per-room preset temperature number entities (for example number.living_room_preset_comfort_temp), so Hearth is leaving the room alone. In the VTherm's configuration, untick 'use central configuration' for preset temperatures. VTherm then creates the numbers at 7 C, so set them to the room's real preset temperatures before Hearth takes over. Until then you can keep the room on Observe only, which needs no numbers."
     },
     "scheduler_day_conflict": {
       "title": "Two Scheduler schedules claim the same day",
