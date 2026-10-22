@@ -243,6 +243,7 @@ class LearningMixin:
             "would_apply": self._correction(bucket),
             "applying": self.enabled(SWITCH_APPLY_LEARNING),
             "recording": self.enabled(SWITCH_LEARNING),
+            **self.last_reset_attrs(),
             "half_life_days": self.const("learning_half_life_days"),
             "min_events": self.const("learning_min_events"),
         }
@@ -261,6 +262,8 @@ class LearningMixin:
         valid = (*BUCKETS, RESET_WARMING_RATE)
         if bucket is not None and bucket not in valid:
             raise ServiceValidationError(f"Unknown bucket {bucket!r}; expected one of {', '.join(valid)}")
+        # D41: keep what is about to be cleared so hearth.undo_reset can put it back
+        await self._stash_reset(bucket)
         if bucket == RESET_WARMING_RATE:
             # D38: the warming-rate model is not a ledger bucket. Clear it, drop any run in progress
             # (it was measured against the same sensor) and the cached preheat plan.
@@ -272,8 +275,7 @@ class LearningMixin:
         else:
             self.ledger.reset(bucket)
             self._diagnostic("reset_learning", f"Ledger reset ({bucket or 'all buckets'})")
-        self._schedule_save()
-        await self.async_evaluate("reset_learning")
+        await self._async_commit_learning("reset_learning")
 
 
 def _f(value) -> float | None:

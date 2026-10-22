@@ -296,7 +296,7 @@
     },
     "reset_learning": {
       "name": "Reset learning",
-      "description": "Clear the override ledger for a room, or one attribution bucket, or the learned warming rate.",
+      "description": "Clear the override ledger for a room, or one attribution bucket, or the learned warming rate. What is cleared is kept so undo_reset can bring it back.",
       "fields": {
         "entry_id": {
           "name": "Room",
@@ -309,6 +309,60 @@
         "bucket": {
           "name": "Bucket",
           "description": "Leave empty to reset every ledger bucket. warming_rate clears the learned warming rate instead (use it after changing the room's temperature sensor); it is never included in an empty reset."
+        }
+      }
+    },
+    "export_learning": {
+      "name": "Export learning",
+      "description": "Return a room's learnt values (the warming rate, the override ledger and the outdoor running mean) as response data, to keep as a backup or to move to another room. Nothing is written to disk. Name one room to get its data directly; name none to get every room under 'rooms'.",
+      "fields": {
+        "entry_id": {
+          "name": "Room",
+          "description": "The Hearth room (config entry)."
+        },
+        "vtherm_entity_id": {
+          "name": "VTherm",
+          "description": "Alternatively, the VTherm climate entity the room drives."
+        },
+        "parts": {
+          "name": "Parts",
+          "description": "Which parts to export: warming_rate, ledger, running_mean. Leave empty for all three. A part with nothing learnt yet is left out."
+        }
+      }
+    },
+    "import_learning": {
+      "name": "Import learning",
+      "description": "Replace a room's learnt values with data from export_learning, or built from the matching parts of a diagnostics download (room.mechanisms.warming, room.ledger and room.running_mean) placed under 'parts' as warming_rate, ledger and running_mean. Everything is checked before anything is applied, and each imported part replaces the room's current one. Importing a warming rate also drops any heating run in progress.",
+      "fields": {
+        "entry_id": {
+          "name": "Room",
+          "description": "The Hearth room (config entry)."
+        },
+        "vtherm_entity_id": {
+          "name": "VTherm",
+          "description": "Alternatively, the VTherm climate entity the room drives."
+        },
+        "data": {
+          "name": "Data",
+          "description": "The learning data object, as returned by export_learning (format hearth.learning, version 1)."
+        },
+        "parts": {
+          "name": "Parts",
+          "description": "Which parts of the data to import: warming_rate, ledger, running_mean. Leave empty for every part the data holds."
+        }
+      }
+    },
+    "undo_reset": {
+      "name": "Undo reset",
+      "description": "Put back what the last reset_learning cleared in this room. Only the most recent reset is kept, and it is gone once undone. Learning recorded since the reset is kept alongside the restored values.",
+      "fields": {
+        "entry_id": {
+          "name": "Room",
+          "description": "The Hearth room (config entry)."
+        },
+        "vtherm_entity_id": {
+          "name": "VTherm",
+          "description": "Alternatively, the VTherm climate entity the room drives."
         }
       }
     }

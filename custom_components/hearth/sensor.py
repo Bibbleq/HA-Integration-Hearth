@@ -195,6 +195,7 @@ def _warming_rate_attrs(room: HearthRoom) -> dict[str, Any]:
         "run_started_at": run.started_at.isoformat() if run else None,
         "run_tainted": run.taint_reason if run and run.tainted else None,
         "recent_runs": [list(r) for r in model.runs[-5:]],
+        **room.last_reset_attrs(),
     }
 
 

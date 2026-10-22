@@ -225,5 +225,8 @@ SERVICE_SET_SCHEDULE: Final = "set_schedule"
 SERVICE_RESET_LEARNING: Final = "reset_learning"
 # reset_learning target that clears the warming-rate model rather than a ledger bucket (D38)
 RESET_WARMING_RATE: Final = "warming_rate"
+SERVICE_EXPORT_LEARNING: Final = "export_learning"
+SERVICE_IMPORT_LEARNING: Final = "import_learning"
+SERVICE_UNDO_RESET: Final = "undo_reset"
 SERVICE_REFRESH_FORECAST: Final = "refresh_forecast"
 SERVICE_RECOMPUTE: Final = "recompute"

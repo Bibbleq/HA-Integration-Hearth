@@ -6,17 +6,20 @@ import logging
 from datetime import timedelta
 
 import voluptuous as vol
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
     DOMAIN,
+    SERVICE_EXPORT_LEARNING,
+    SERVICE_IMPORT_LEARNING,
     SERVICE_OVERRIDE,
     SERVICE_RECOMPUTE,
     SERVICE_REFRESH_FORECAST,
     SERVICE_RESET_LEARNING,
     SERVICE_SET_SCHEDULE,
+    SERVICE_UNDO_RESET,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -77,6 +80,26 @@ def async_setup_services(hass: HomeAssistant) -> None:
         for room in _rooms_for(hass, call, True):
             await room.async_service_reset_learning(call.data.get("bucket"))
 
+    async def handle_export_learning(call: ServiceCall) -> ServiceResponse:
+        # D40: a call that names one room gets that room's blob; a call that names none gets {"rooms": {...}}
+        rooms = _rooms_for(hass, call, False)
+        parts = call.data.get("parts")
+        blobs = {room.vtherm.entity_id: await room.async_export_learning(parts) for room in rooms}
+        named = bool(call.data.get("entry_id") or call.data.get("vtherm_entity_id"))
+        if named and len(rooms) == 1:
+            return next(iter(blobs.values()))
+        return {"rooms": blobs}
+
+    async def handle_import_learning(call: ServiceCall) -> None:
+        rooms = _rooms_for(hass, call, True)
+        if len(rooms) != 1:
+            raise ServiceValidationError("import_learning needs exactly one room")
+        await rooms[0].async_import_learning(call.data["data"], call.data.get("parts"))
+
+    async def handle_undo_reset(call: ServiceCall) -> None:
+        for room in _rooms_for(hass, call, True):
+            await room.async_service_undo_reset()
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_OVERRIDE,
@@ -102,9 +125,32 @@ def async_setup_services(hass: HomeAssistant) -> None:
         handle_reset_learning,
         schema=vol.Schema({**ROOM_SCHEMA, vol.Optional("bucket"): cv.string}),
     )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_EXPORT_LEARNING,
+        handle_export_learning,
+        schema=vol.Schema({**ROOM_SCHEMA, vol.Optional("parts"): vol.All(cv.ensure_list, [cv.string])}),
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_IMPORT_LEARNING,
+        handle_import_learning,
+        schema=vol.Schema({**ROOM_SCHEMA, vol.Required("data"): dict, vol.Optional("parts"): vol.All(cv.ensure_list, [cv.string])}),
+    )
+    hass.services.async_register(DOMAIN, SERVICE_UNDO_RESET, handle_undo_reset, schema=vol.Schema(ROOM_SCHEMA))
 
 
 @callback
 def async_unload_services(hass: HomeAssistant) -> None:
-    for service in (SERVICE_OVERRIDE, SERVICE_RECOMPUTE, SERVICE_REFRESH_FORECAST, SERVICE_SET_SCHEDULE, SERVICE_RESET_LEARNING):
+    for service in (
+        SERVICE_OVERRIDE,
+        SERVICE_RECOMPUTE,
+        SERVICE_REFRESH_FORECAST,
+        SERVICE_SET_SCHEDULE,
+        SERVICE_RESET_LEARNING,
+        SERVICE_EXPORT_LEARNING,
+        SERVICE_IMPORT_LEARNING,
+        SERVICE_UNDO_RESET,
+    ):
         hass.services.async_remove(DOMAIN, service)

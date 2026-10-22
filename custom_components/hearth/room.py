@@ -68,6 +68,7 @@ from .mech_schedule import ScheduleMixin
 from .mech_setback import SetbackMixin
 from .mech_skip import SkipMixin
 from .mech_source import SchedulerSourceMixin
+from .mech_transfer import TransferMixin
 from .seed import async_daily_means
 from .vtherm import ClampViolation, VThermAdapter, VThermSnapshot
 
@@ -92,7 +93,7 @@ def parse_hhmm(value: str, fallback: str) -> time:
     return time(0, 0)
 
 
-class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, SetbackMixin):
+class HearthRoom(SchedulerSourceMixin, TransferMixin, LearningMixin, ScheduleMixin, SkipMixin, SetbackMixin):
     """Controller for one VTherm.
 
     Mixin order matters: a later phase's mixin overrides the hooks of an earlier one.
@@ -132,6 +133,7 @@ class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, 
         self._init_schedule()
         self._init_source()
         self._init_learning()
+        self._init_transfer()
 
     # ------------------------------------------------------------- config access
 
@@ -267,6 +269,7 @@ class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, 
         self.last_external_change_at = _dt(data.get("last_external_change_at"))
         self.last_external_change = data.get("last_external_change")
         self._load_mechanisms()
+        self._load_transfer_state(data.get("last_reset"))
         self.settings_loaded = True
 
     def _load_mechanisms(self) -> None:
@@ -293,6 +296,7 @@ class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, 
             "mechanisms": self._dump_mechanisms(),
             "last_external_change_at": _iso(self.last_external_change_at),
             "last_external_change": self.last_external_change,
+            "last_reset": self.last_reset,
         }
 
     def _schedule_save(self) -> None:
@@ -554,6 +558,7 @@ class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, 
             "standdown": self.standdown.to_dict(),
             "ledger": self.ledger.to_dict(),
             "scheduler_source": self.source_diagnostics(),
+            "last_reset": self.last_reset,
         }
 
 

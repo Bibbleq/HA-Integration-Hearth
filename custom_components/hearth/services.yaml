@@ -68,3 +68,53 @@ reset_learning:
             - skip_failure
             - baseline_error
             - warming_rate
+export_learning:
+  fields:
+    entry_id:
+      selector:
+        config_entry:
+          integration: hearth
+    vtherm_entity_id:
+      selector:
+        entity:
+          domain: climate
+    parts:
+      selector:
+        select:
+          multiple: true
+          options:
+            - warming_rate
+            - ledger
+            - running_mean
+import_learning:
+  fields:
+    entry_id:
+      selector:
+        config_entry:
+          integration: hearth
+    vtherm_entity_id:
+      selector:
+        entity:
+          domain: climate
+    data:
+      required: true
+      selector:
+        object:
+    parts:
+      selector:
+        select:
+          multiple: true
+          options:
+            - warming_rate
+            - ledger
+            - running_mean
+undo_reset:
+  fields:
+    entry_id:
+      selector:
+        config_entry:
+          integration: hearth
+    vtherm_entity_id:
+      selector:
+        entity:
+          domain: climate
