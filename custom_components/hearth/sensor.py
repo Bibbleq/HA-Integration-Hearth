@@ -286,6 +286,7 @@ def _standdown_attrs(room: HearthRoom) -> dict[str, Any]:
         "until": sd.until.isoformat() if active and sd.until else None,
         "last_cause": sd.cause,
         "last_external_change": room.last_external_change,
+        "last_origin": (room.last_external_change or {}).get("origin"),
         "learning_enabled": room.enabled("learning"),
         "timeout_min": room.const("standdown_timeout_min"),
         "recent_ignored_overrides": room.learning.get("ignored", [])[-5:],

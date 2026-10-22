@@ -6,7 +6,7 @@ Python 3.14, hassfest, and HACS validation.
 
 | Check | State |
 |---|---|
-| pytest (386 tests at 0.7.0: 246 pure-core, 140 HA-level) | green on CI |
+| pytest (414 tests at 0.7.0: 246 pure-core, 168 HA-level) | green on CI |
 | hassfest | green |
 | HACS validation | strict since the repo went public (see D18) |
 
@@ -110,7 +110,7 @@ real Versatile Thermostat or a real weather integration:
   `parts`; validates everything before applying) and `hearth.undo_reset`; `hearth.reset_learning` now stashes what
   it clears as `last_reset` in the room store (no store migration; 0.6.x stores load unchanged); `last_reset_at` and
   `last_reset_bucket` on the warming-rate and `learning_<bucket>` sensors and `room.last_reset` in the diagnostics
-  download. Also fixes the Hearth actions disappearing after a reload of the only room. Tests: 386 (was 290).
+  download. Also fixes the Hearth actions disappearing after a reload of the only room. Tests: 414 (was 290).
   Verify on the live system:
   1. Developer Tools > Actions, YAML mode: `hearth.export_learning` with `vtherm_entity_id` returns the room's
      blob (`format`, `version`, `parts`) and with no room returns `rooms`; the response is readable and complete
@@ -125,6 +125,25 @@ real Versatile Thermostat or a real weather integration:
      room is unchanged.
   7. The `script` example in the README with `persistent_notification.create`: check how long a real export is in
      a notification before relying on it as a backup.
+
+  Also in 0.7.0, from the first live day of the Scheduler take-over (D45-D48): `switch.hearth_paused`, changes
+  made by automations no longer learnt from, and a re-enabled Scheduler source switched off again. Verify:
+  8. `switch.hearth_paused` on: every `binary_sensor.hearth_<room>_dormant` reads on with reason `paused`, nothing is
+     written to VTherm, the owned Scheduler schedules stay off (check the Scheduler card), and it survives a restart.
+     `switch.hearth_active` off while paused still switches the schedules back on.
+  9. Home Mode automation, Away branch pauses, Home branch unpauses: on unpause every room whose schedule switch is on
+     switches to the preset of its current block within seconds, even after a pre-arrival warm-up set comfort, and
+     `hearth_diagnostic` shows kind `resumed`.
+  10. Turn a Hearth-owned Scheduler schedule on by hand: it goes off again within a second, a `hearth_diagnostic` of
+      kind `scheduler_source_reenabled` appears, the room is not stood down, nothing lands in the ledger (the
+      stand-down sensor's `recent_ignored_overrides` shows `scheduler_source`) and Hearth's block is back. Do it with
+      the pause on and off. If you can make `switch.turn_off` fail, the repair appears two minutes later.
+  11. Change a preset from the dashboard (a person) and from an automation: the first stands the room down and lands in
+      the ledger; the second stands it down (`cause` `automation_preset`, `last_origin` `automation`) but adds only an
+      `automation` entry to `recent_ignored_overrides`. Check that a person's edit of a preset temperature number is
+      still learnt (VTherm moves its own target afterwards without the person's context, which Hearth bridges via the
+      number's own state; confirm on the live system).
+  12. Check the context of the Scheduler's own preset writes: the grace window assumes they carry no user.
 - **0.6.1**: `hearth.reset_learning` with `bucket: warming_rate` clears the learned warming rate (D38). Use it
   after pointing a VTherm at a different temperature sensor.
 - **0.6.0**: Scheduler entities as a room's schedule source, with automatic take-over and fallback

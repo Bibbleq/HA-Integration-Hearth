@@ -204,7 +204,7 @@ down, it just is not recorded. Changes while dormant (window open, frost, away..
 Three change kinds are detected from the climate entity's state: a preset switch Hearth did not make
 (`preset`), a preset switch to `none` with a target change (`setpoint`, VTherm's manual-temperature
 behaviour), and a target change within the same preset that does not match one of Hearth's own number
-writes (`temp`, a hand edit of the preset number).
+writes (`temp`, a hand edit of the preset number). From 0.7.0 only a person's change is also learnt from (D47).
 
 ## D27. Ledger magnitude for preset switches
 
@@ -307,7 +307,8 @@ update listener and reload the entry on every Scheduler edit.
 
 Ownership is "the room's schedule switch is on and the global `switch.hearth_active` is on", the existing
 `enabled(SWITCH_SCHEDULE)`. It is reconciled on every evaluation as a transition on an in-memory flag, so
-nothing is re-asserted every tick (a user who turns a source back on is told via a repair, not fought).
+nothing is re-asserted every tick. (0.6.0 only flagged a source that was turned back on, with a repair. From 0.7.0 Hearth
+switches it off again, see D48; the repair is now the fallback for a switch-off that does not stick.)
 
 - Not owned to owned: `switch.turn_off` on every source that exists. This also runs at entry setup when the
   switch was already on, which makes the sources off idempotently after a restart.
@@ -349,7 +350,7 @@ and goes, and all cleared on unload and removal:
 - `scheduler_shared_source`: `entities` are the sources, `detail` the other climate entities.
 - `scheduler_unsupported_action`: `entities` is the unusable schedule, `detail` says why.
 - `scheduler_source_enabled`: a source is still on `scheduler_enabled_check_s` (Tier 3, default 120) seconds
-  after Hearth took over. Checked by a one-shot timer and on every source state change; `entities` lists every
+  after Hearth took over, or (0.7.0, D48) after it last switched a re-enabled source off. Checked by a one-shot timer and on every source state change; `entities` lists every
   offender. One issue per room, with all entity ids in the description. It clears when the source goes off or
   the room is handed back.
 
@@ -458,3 +459,71 @@ Found while testing undo across a reload: unloading the last room removed the se
 back, because a config-entry reload runs `async_setup_entry` but not `async_setup`. After any options change on a
 single-room install every Hearth action disappeared until the next restart. `async_setup_entry` now calls the
 idempotent `async_setup_services`, with a regression test.
+
+## D45. Global pause: `switch.hearth_paused`
+
+A second global switch, created beside `switch.hearth_active` by the same config entry and under the same ownership
+rule (D3). Its state is saved with the other in the `hearth.global` store (`{"active": ..., "paused": ...}`; a store
+without `paused` loads as off), so a restart keeps it, and it defaults to off. Turning it on or off evaluates every
+room with reason `pause_switch`.
+
+While paused every room is dormant with reason `paused` (the dormant binary sensor's `reason`, its new
+`global_paused` attribute, the diagnostics' `dormant_reason` and `global_paused`). Dormancy already means no adaptive,
+skip, setback, schedule or preheat writes, heating runs tainted (and so discarded), and external changes ignored
+(ignored list reason `dormant`, no stand-down, no ledger); all of that is tested for `paused`.
+
+The whole difference from `switch.hearth_active` off is that **pause does not hand back**: ownership of Scheduler
+sources is decided by `enabled(SWITCH_SCHEDULE)` (schedule switch and `hearth_active`), which the pause does not touch,
+so the sources stay off. Precedence: `hearth_active` off wins, the room reads `disabled` and is handed back; with
+`hearth_active` on the pause wins over every VTherm-derived dormant reason (window, away...). Both switches carry a
+`description` attribute saying this plainly (entity translations have no description field, so strings.json only
+carries the names).
+
+## D46. Leaving the pause goes straight back to normal
+
+What happened on leaving dormancy before: nothing special. The schedule applies a block once (`applied_key`), a change
+made by somebody since the block started stands until the next block, and a stand-down lasts its time, so a room that
+left dormancy mid-block kept whatever had been set meanwhile and only the next boundary corrected it. That is right
+for a window closing and is unchanged for every dormant reason except `paused`.
+
+Leaving `paused` (the room's reason was `paused` and is now something else) sets a resume flag, and the first
+evaluation in which the room is not dormant (so unpausing with a window open waits for the window) runs
+`_handle_resume`: it ends any stand-down (unpausing is a fresh start, and a stand-down left over from before the
+pause would otherwise defeat the point) and forgets the applied block, so the same evaluation applies the CURRENT block's
+preset, for rooms whose schedule switch is on, even if a warm-up had set comfort. The adaptive comfort recompute runs in the
+same evaluation under its usual rules (it writes if the target differs from Hearth's last write), and skip, setback and
+preheat follow their existing rules; nothing new was invented for them.
+
+## D47. A person's change, an automation's change
+
+Each external change to the VTherm (the ones the override detector already treats as manual, D26) is classified by the
+new state's context: **human** if `context.user_id` is not None, otherwise **automation** (automations, scripts,
+Scheduler, integrations, VTherm itself after a restart). A same-preset target change is also human when the preset
+number was edited by a person in the last 10 s, because VTherm moves its own target afterwards without the person's context.
+
+- Human: exactly the behaviour of 0.6: stand-down (cause `manual_<kind>`) and a ledger entry when override learning is on.
+- Automation: Hearth still stands down (cause `automation_<kind>`, same rules: next block or the timeout, and the
+  stand-down still sits behind the override-learning switch as in D26), the heating run is tainted as before, but there is
+  no ledger entry. The change is added to the ignored list with reason `automation`. `last_external_change` gains
+  `origin` (`human` / `automation`) and the stand-down sensor exposes it as `last_origin`.
+- Tier 3 `learn_from_automations: false`. True classifies everything as human (the 0.6 behaviour, including the
+  `manual_` cause).
+- Hearth's own writes are recognised first, by the write log, before any classification, and are neither.
+
+## D48. A source switched back on is switched off again (supersedes the flag-only part of D34)
+
+When a source Scheduler entity turns on while the room is taken over and `hearth_active` is on (paused or not), Hearth
+calls `switch.turn_off` on it straight away and, once it is off, re-applies its own current block (unless paused or
+dormant, in which case the unpause or the end of the dormancy does it). A call that fails is retried on later evaluations
+(not within 5 s of the first attempt). The `scheduler_source_enabled` repair stays, for a source that is still on
+`scheduler_enabled_check_s` (120 s) after the take-over or after the last re-enable.
+
+The Scheduler fires its current slot the moment it is enabled, so the preset write races Hearth's reaction. A preset
+change within `source_reenable_grace_s` (Tier 3, default 15 s) of a source coming on is attributed to the Scheduler: no
+stand-down, no ledger entry, ignored with reason `scheduler_source`, `last_external_change` untouched. Both orders are
+handled. Write after the switch event: the re-enable time is remembered. Write before it (or with the switch state
+committed but its event not yet handled): the live source state is checked (on, and changed within the grace window); if
+neither saw it, the change is handled as usual and the source event then takes it back, restoring the stand-down, the ledger,
+`last_override` and `last_external_change` that the change altered, which are captured for that purpose before every
+external change. A real person's change within 15 s of a re-enable can be misread as the Scheduler's; that is the price
+of the window.

@@ -14,7 +14,7 @@ if not HA_AVAILABLE:
     # Plain-Python run (no HA installed): only the pure core tests are collected.
     collect_ignore_glob = ["test_*.py"]
 else:
-    from homeassistant.core import HomeAssistant
+    from homeassistant.core import Context, HomeAssistant
     from homeassistant.setup import async_setup_component
     from homeassistant.util import dt as dt_util
     from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
@@ -91,8 +91,10 @@ def vtherm_attrs(
     }
 
 
-def set_vtherm(hass: HomeAssistant, state: str = "heat", **kwargs) -> None:
-    hass.states.async_set(VTHERM, state, vtherm_attrs(**kwargs))
+def set_vtherm(hass: HomeAssistant, state: str = "heat", *, user_id: str | None = None, **kwargs) -> None:
+    """Set the VTherm state. `user_id` puts a person's context on it; without one the change reads as an automation's."""
+    context = Context(user_id=user_id) if user_id else None
+    hass.states.async_set(VTHERM, state, vtherm_attrs(**kwargs), context=context)
 
 
 def set_numbers(hass: HomeAssistant, comfort: float = 20.5, eco: float = 15.0, boost: float = 22.0) -> None:

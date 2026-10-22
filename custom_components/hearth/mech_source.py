@@ -4,7 +4,8 @@ When `scheduler_entity_ids` is set, the room's schedule is derived from those HA
 (`switch.schedule_*`) entities instead of the stored blob. Hearth owns preset switching only
 while the room's schedule switch is on and the global switch is on; it then switches the source
 schedules off, and switches them back on whenever it stops owning the room (schedule switch off,
-global switch off, unload, removal). Dormancy and stand-down are temporary and never hand back.
+global switch off, unload, removal). Dormancy (including the global pause) and stand-down are temporary and never hand back.
+A source that is switched back on while Hearth owns the room is switched off again (D48).
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from datetime import datetime, time, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.const import STATE_OFF, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import EventStateChangedData, async_track_point_in_utc_time, async_track_state_change_event
@@ -42,6 +43,8 @@ ALL_ISSUES = (ISSUE_DAY_CONFLICT, ISSUE_SHARED_SOURCE, ISSUE_UNSUPPORTED_ACTION,
 # What "blocked" means for sensor.<room>_next_block, most important first. source_enabled never blocks.
 BLOCKING_PRIORITY = (ISSUE_SHARED_SOURCE, ISSUE_UNSUPPORTED_ACTION, ISSUE_DAY_CONFLICT)
 _PENDING_STATES = (ConfigEntryState.NOT_LOADED, ConfigEntryState.SETUP_IN_PROGRESS, ConfigEntryState.UNLOAD_IN_PROGRESS)
+
+_REASSERT_RETRY_S = 5  # seconds after a source came back on before a source still on is switched off again
 
 SHARED_OK = "ok"
 SHARED_PENDING = "pending"  # a Hearth room that has not finished loading: wait, no repair
@@ -72,6 +75,8 @@ class SchedulerSourceMixin:
     _took_over: bool
     _took_over_at: datetime | None
     _enabled_timer: CALLBACK_TYPE | None
+    _source_reenabled_at: datetime | None
+    _reasserting: bool
     _issue_state: dict[str, dict[str, str]]
     _shared_state: str
     _shared_offenders: list[str]
@@ -89,6 +94,8 @@ class SchedulerSourceMixin:
         self._took_over = False
         self._took_over_at = None
         self._enabled_timer = None
+        self._source_reenabled_at = None
+        self._reasserting = False
         self._issue_state = {}
         self._shared_state = SHARED_OK
         self._shared_offenders = []
@@ -178,9 +185,78 @@ class SchedulerSourceMixin:
             self._set_issue(key, None)
 
     @callback
-    def _on_source_event(self, _event: Event[EventStateChangedData]) -> None:
+    def _on_source_event(self, event: Event[EventStateChangedData]) -> None:
         self._refresh_source("source_event")
+        new = event.data.get("new_state")
+        old = event.data.get("old_state")
+        if self._took_over and self.global_active and new is not None and new.state == STATE_ON and (old is None or old.state != STATE_ON):
+            self._on_source_reenabled(dt_util.utcnow(), new.entity_id)
         self.hass.async_create_task(self.async_evaluate("scheduler_source"))
+
+    def _on_source_reenabled(self, now: datetime, entity_id: str) -> None:
+        """D48: a source Hearth switched off is on again (the Home Mode automation, a person, a Scheduler reload).
+
+        The Scheduler fires its current slot the moment it is enabled. If that write reached the VTherm before this
+        event, Hearth has already read it as a person's override: take that back. Then switch the source off and
+        put Hearth's own block back.
+        """
+        self._source_reenabled_at = now
+        undone = self.undo_recent_override(now)
+        self._diagnostic(
+            "scheduler_source_reenabled",
+            f"{entity_id} was switched back on while Hearth owns the room; switching it off again"
+            + (" (and ignoring the preset change it caused)" if undone else ""),
+        )
+        self._arm_enabled_timer(now)
+        self._reasserting = True
+        self.hass.async_create_task(self._async_reassert_sources())
+
+    def _retry_reassert_due(self, now: datetime) -> bool:
+        """A re-assert that did not stick is retried on later evaluations, not while the first attempt is settling."""
+        at = self._source_reenabled_at
+        return at is not None and not self._reasserting and (now - at).total_seconds() >= _REASSERT_RETRY_S
+
+    def scheduler_grace_active(self, now: datetime) -> bool:
+        """True while a preset change on the VTherm is explained by a Scheduler source that has just come on."""
+        if not self._took_over:
+            return False
+        grace = timedelta(seconds=float(self.const("source_reenable_grace_s")))
+        if self._source_reenabled_at is not None and now - self._source_reenabled_at <= grace:
+            return True
+        for entity_id in self.source_ids:  # the write can beat our own handling of the switch event
+            state = self.hass.states.get(entity_id)
+            if state is not None and state.state == STATE_ON and now - state.last_changed <= grace:
+                return True
+        return False
+
+    def request_reapply(self) -> None:
+        """Put Hearth's own current block back after the Scheduler wrote over it."""
+        self.hass.async_create_task(self._async_reapply_own_block())
+
+    async def _async_reapply_own_block(self) -> None:
+        self.sched.pop("applied_key", None)
+        await self.async_evaluate("scheduler_source_reapply")
+
+    async def _async_reassert_sources(self) -> None:
+        try:
+            await self._turn_off_enabled_sources()
+        finally:
+            self._reasserting = False
+        await self._async_reapply_own_block()
+
+    async def _turn_off_enabled_sources(self) -> bool:
+        """switch.turn_off on every source that is currently on. False if a call failed."""
+        ok = True
+        for entity_id in self.source_ids:
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state != STATE_ON:
+                continue
+            try:
+                await self.hass.services.async_call("switch", "turn_off", {"entity_id": entity_id}, blocking=True)
+            except Exception as err:  # noqa: BLE001 - a failed Scheduler call must never take the controller down
+                ok = False
+                _LOGGER.warning("%s: switch.turn_off on %s failed: %s", self.room_name, entity_id, err)
+        return ok
 
     async def _reconcile_peers(self) -> None:
         """Other rooms sharing a source depend on this room's schedule switch and load state."""
@@ -285,6 +361,8 @@ class SchedulerSourceMixin:
             await self._take_over(now)
         elif not can_take_over and self._took_over:
             await self._hand_back("shared_source" if wanted else "schedule or global switch off")
+        elif can_take_over and self._took_over and self._retry_reassert_due(now):
+            await self._turn_off_enabled_sources()  # a re-assert that failed is retried here
         self._sync_issues(now)
 
     def _shared_check(self) -> tuple[str, list[str]]:
@@ -372,7 +450,8 @@ class SchedulerSourceMixin:
         """Sources still on a while after Hearth took the room over."""
         if not self._took_over or self._took_over_at is None:
             return []
-        if now - self._took_over_at < timedelta(seconds=float(self.const("scheduler_enabled_check_s"))):
+        since = max(self._took_over_at, self._source_reenabled_at or self._took_over_at)
+        if now - since < timedelta(seconds=float(self.const("scheduler_enabled_check_s"))):
             return []
         out = []
         for entity_id in self.source_ids:

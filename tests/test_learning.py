@@ -11,11 +11,17 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.hearth.const import DOMAIN
 
-from .conftest import COMFORT_NUMBER, VTHERM, WEATHER, make_entry, seed_store, set_numbers, set_vtherm, setup_room
+from .conftest import COMFORT_NUMBER, VTHERM, WEATHER, make_entry, seed_store, set_numbers, setup_room
+from .conftest import set_vtherm as _set_vtherm
 from .test_forecast_skip import install_weather, local, refresh_forecast
 from .test_schedule import SCHEDULE, tick
 
 LEARN = {"learning": True}
+
+
+def set_vtherm(hass: HomeAssistant, state: str = "heat", **kwargs) -> None:
+    """These tests play a person changing the thermostat; automation-made changes are tested in test_pause_and_origin."""
+    _set_vtherm(hass, state, user_id="ben", **kwargs)
 
 
 async def test_manual_preset_change_stands_down_and_records(hass: HomeAssistant, hass_storage, services, freezer) -> None:

@@ -56,7 +56,8 @@ Then *Settings > Devices & services > Add integration > Hearth*. One Hearth room
 
 | Entity | Default | Purpose |
 |---|---|---|
-| `switch.hearth_active` | on | Global kill switch (one for the whole integration) |
+| `switch.hearth_active` | on | Global kill switch (one for the whole integration). Off hands every room back: Scheduler schedules Hearth switched off are switched back on |
+| `switch.hearth_paused` | off | Global pause (one for the whole integration). On makes every room dormant (`paused`) but keeps ownership: Scheduler schedules Hearth switched off **stay off**. Off puts each room straight back on its current schedule block. See [Working with occupancy / home-away automations](#working-with-occupancy--home-away-automations) |
 | `switch.hearth_<room>_adaptive_comfort` | on | Phase 1 |
 | `switch.hearth_<room>_forecast_skip` | off | Phase 2 |
 | `switch.hearth_<room>_setback_depth` | off | Phase 2 |
@@ -89,6 +90,8 @@ hearth:
     max_forecast_age_hours: 3
     safety_factor: 1.15
     max_preheat_min: 120
+    learn_from_automations: false   # true: learn from automation-made changes too
+    source_reenable_grace_s: 15     # a preset change this soon after a Scheduler source comes on is the Scheduler's
 ```
 
 Unknown keys are ignored with a warning. Nothing in Tier 3 is required for sane behaviour.
@@ -108,7 +111,7 @@ Each room is a device named *Hearth \<Room\>*. Diagnostics (read-only):
 | `sensor.hearth_<room>_next_block` | Phase 3: "comfort by 06:30, preheat est. 05:52". Attributes include `schedule_source` (`scheduler` / `explicit` / `none`), `source_entities`, `source_blocked_reason` and `derived_at` |
 | `sensor.hearth_<room>_stand_down` | none / until (local timestamp), with cause and the last external change |
 | `sensor.hearth_<room>_learning_<bucket>` | Phase 4: decayed mean bias in C per bucket (`preheat_shortfall`, `slope_error`, `skip_failure`, `baseline_error`) with evidence count and the correction that would apply |
-| `binary_sensor.hearth_<room>_dormant` | On when Hearth is leaving the room alone, with reason (away / central_frost / window / safety / overpowering / off / unavailable / disabled / no_preset_entities) |
+| `binary_sensor.hearth_<room>_dormant` | On when Hearth is leaving the room alone, with reason (away / central_frost / window / safety / overpowering / off / unavailable / disabled / paused / no_preset_entities) |
 
 Hearth also fires `hearth_diagnostic` events (seeding, outdoor sensor loss, refused writes, learning imports and
 undos) and provides a config-entry diagnostics download. The warming-rate sensor and the four `learning_<bucket>`
@@ -212,6 +215,40 @@ if you want the backup somewhere that survives a restart. To use the diagnostics
 parts: `data: {format: hearth.learning, version: 1, parts: {warming_rate: <room.mechanisms.warming>,
 ledger: <room.ledger>, running_mean: <room.running_mean>}}`.
 
+## Working with occupancy / home-away automations
+
+Hearth predicts: it moves comfort and presets from the weather, the schedule and what it has learnt. Whether
+anyone is home is something you know, so it is better left to your own automations, which should decide
+*whether Hearth acts*, not fight it. The pattern:
+
+- **Away / Holiday branch:** `switch.turn_on` on `switch.hearth_paused`, then do what the away mode needs (a
+  temperature cap, a deep setback, the eco preset). Hearth is dormant while paused: it writes nothing, learns
+  nothing, ignores the changes you make, and keeps its Scheduler schedules switched off.
+- **Home / Guest branch:** `switch.turn_off` on `switch.hearth_paused`. Each room goes back to its current schedule
+  block at once (even if a pre-arrival warm-up had set comfort), and the adaptive comfort recompute runs. Do not
+  turn on the Scheduler schedules of rooms Hearth owns; if an automation does it anyway Hearth switches them off
+  again and puts its own block back.
+
+```yaml
+- choose:
+    - conditions: "{{ is_state('input_select.home_mode', ['Away', 'Holiday']) }}"
+      sequence:
+        - action: switch.turn_on
+          target: {entity_id: switch.hearth_paused}
+        # ...away temperature cap, deep setback...
+  default:
+    - action: switch.turn_off
+      target: {entity_id: switch.hearth_paused}
+```
+
+Pausing is not the kill switch. `switch.hearth_active` off hands every room back (Scheduler schedules come on), so
+use it when you want Hearth out of the picture; `switch.hearth_paused` on keeps ownership and leaves them off. With
+both set, `switch.hearth_active` off wins. The pause is remembered across restarts.
+
+Unpausing ends any stand-down (it is a fresh start) and applies the current schedule block of every room whose
+schedule switch is on; a skip, setback or preheat starts only by its usual rules. Leaving other kinds of dormancy
+(a window closing, a presence change) is unchanged: whatever was set meanwhile stands until the next block.
+
 ## Enabling each phase
 
 Phases are meant to soak for a few weeks each. Everything is per room.
@@ -233,6 +270,12 @@ Phases are meant to soak for a few weeks each. Everything is per room.
    recorded in the ledger. The `learning_*` sensors show the biases and the correction each bucket would
    apply. `apply_learned_corrections` is a second-winter flag: bounded corrections (+/- 1 C on targets,
    +/- 25 % on the preheat safety factor) after three consistent events, always inside the band clamps.
+   **Only a person's changes are learnt from.** A change counts as a person's when the state change carries a
+   user (`context.user_id`: the dashboard, the app, voice). A change with no user (an automation, a script,
+   Scheduler, another integration) still stands Hearth down for the room, so Hearth does not fight it, but it
+   is not recorded in the ledger; it appears in the stand-down sensor's `recent_ignored_overrides` with reason
+   `automation`, and `last_origin` on that sensor says `human` or `automation`. Set `learn_from_automations: true`
+   under `hearth: advanced:` to learn from both, as before 0.7.0. Hearth's own writes are never either.
 
 ### Schedule format
 
@@ -309,7 +352,14 @@ heating and you can read the derived schedule in `sensor.hearth_<room>_next_bloc
   every source schedule. It does the same at startup if the switch was already on.
 - Turning the schedule switch off, turning `switch.hearth_active` off, reloading or unloading the integration, or
   deleting the room makes Hearth call `switch.turn_on` on every source schedule, so Scheduler is the fallback.
-  Dormancy (window, away, frost, safety) and a stand-down are temporary and do not hand back.
+  Dormancy (window, away, frost, safety), the global pause (`switch.hearth_paused`) and a stand-down are temporary and do
+  not hand back.
+- If a source is switched back on while Hearth owns the room (an automation that turns all schedules on, a tap in
+  the Scheduler card, a Scheduler reload), Hearth calls `switch.turn_off` on it again straight away, whether or not
+  it is paused. The Scheduler fires its current slot the moment it is enabled; a preset change within
+  `source_reenable_grace_s` (15 s) of a source coming on is put down to the Scheduler: no stand-down, no ledger
+  entry (ignored with reason `scheduler_source`), and Hearth puts its own current block back (unless paused or
+  dormant). This holds whichever arrives first, the switch event or the preset write.
 - Hearth will not take over a schedule that also drives other climate entities unless each of them is a Hearth
   room with its schedule switch on, because switching it off would stop those rooms. It also will not take over when
   it has no usable schedule yet. Hearth cannot hand back if the integration files are deleted while it owns a room;
@@ -323,7 +373,7 @@ unavailable source is only a diagnostic event and a log line.
 | `scheduler_day_conflict` | Two source schedules cover the same day. Hearth does not apply the change and keeps the last good schedule |
 | `scheduler_shared_source` | A source also drives climate entities that are not Hearth rooms with the schedule switch on. Hearth does not take it over or apply it |
 | `scheduler_unsupported_action` | A slot is not a preset change (or has a sunrise/sunset time). That schedule is unusable and the change is not applied |
-| `scheduler_source_enabled` | A source schedule is still on two minutes after Hearth took the room over, so two systems may be changing presets. Turn it off, or hand the room back |
+| `scheduler_source_enabled` | A source schedule is still on two minutes after Hearth took the room over or switched it off again, so two systems may be changing presets (Hearth's own `switch.turn_off` is not working). Turn it off, or hand the room back |
 
 ## Safety behaviour
 

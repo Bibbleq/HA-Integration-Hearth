@@ -80,6 +80,7 @@ class FakeScheduler:
         self.hass = hass
         self.calls: list[tuple[str, str]] = []
         self.entities: set[str] = set()
+        self.stuck: set[str] = set()  # sources that ignore turn_off, to play a switch call that keeps failing
         hass.bus.async_listen(EVENT_CALL_SERVICE, self._on_call)
 
     def add(self, entity_id: str, attrs: dict, state: str = "on") -> None:
@@ -105,6 +106,8 @@ class FakeScheduler:
         for entity_id in [ids] if isinstance(ids, str) else (ids or []):
             if entity_id in self.entities:
                 self.calls.append((data["service"], entity_id))
+                if data["service"] == "turn_off" and entity_id in self.stuck:
+                    continue
                 self.set_state(entity_id, "on" if data["service"] == "turn_on" else "off")
 
     def calls_for(self, service: str) -> list[str]:
@@ -697,7 +700,8 @@ async def test_source_enabled_repair_after_two_minutes(hass: HomeAssistant, hass
     seed_store(hass_storage, t_rm=10.0, settings={"schedule": True})
     room = await setup_room(hass, make_entry(options=source_options()))
     assert room.took_over
-    # Someone turns a source back on in the Scheduler card
+    # Someone turns a source back on in the Scheduler card, and Hearth's switch.turn_off keeps failing (D48)
+    env.stuck.add(WEEKDAY_ID)
     env.set_state(WEEKDAY_ID, "on")
     await settle(hass)
     assert issue(hass, ISSUE_SOURCE_ENABLED, room.entry) is None  # too early: inside the two minute grace
@@ -708,6 +712,7 @@ async def test_source_enabled_repair_after_two_minutes(hass: HomeAssistant, hass
     assert found is not None and found.translation_placeholders["entities"] == WEEKDAY_ID
     assert hass.states.get(NEXT_BLOCK).attributes["source_blocked_reason"] is None  # not a blocking reason
     # Turning it off clears the repair
+    env.stuck.clear()
     env.set_state(WEEKDAY_ID, "off")
     await settle(hass)
     assert issue(hass, ISSUE_SOURCE_ENABLED, room.entry) is None
@@ -716,6 +721,7 @@ async def test_source_enabled_repair_after_two_minutes(hass: HomeAssistant, hass
 async def test_source_enabled_repair_cleared_on_handback(hass: HomeAssistant, hass_storage, env, freezer) -> None:
     seed_store(hass_storage, t_rm=10.0, settings={"schedule": True})
     room = await setup_room(hass, make_entry(options=source_options()))
+    env.stuck.add(WEEKEND_ID)
     env.set_state(WEEKEND_ID, "on")
     freezer.move_to(dt_util.utcnow() + timedelta(seconds=130))
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=131))
@@ -758,3 +764,168 @@ async def test_diagnostics_include_scheduler_source(hass: HomeAssistant, env) ->
     info = room.diagnostics()["scheduler_source"]
     assert info["source"] == "scheduler" and info["entities"] == SOURCES and info["blocked_reason"] is None
     assert info["last_good"]["mon"] == WEEKDAY_BLOCKS
+
+
+# ------------------------------------------------------------------ pause, and sources switched back on (D45, D48)
+
+PAUSED = "switch.hearth_paused"
+ACTIVE = "switch.hearth_active"
+
+
+async def owned_room(hass: HomeAssistant, hass_storage, freezer, **settings):
+    """A took-over room at 03:00, inside the eco block on every day of the week."""
+    today = dt_util.start_of_local_day()
+    freezer.move_to(local(today, 3, 0))
+    seed_store(hass_storage, t_rm=10.0, settings={"schedule": True, "learning": True, **settings})
+    room = await setup_room(hass, make_entry(options=source_options()))
+    assert room.took_over and room.snapshot.preset == "eco"
+    return room
+
+
+async def switch(hass: HomeAssistant, entity_id: str, on: bool) -> None:
+    await hass.services.async_call("switch", "turn_on" if on else "turn_off", {"entity_id": entity_id}, blocking=True)
+    await hass.async_block_till_done()
+
+
+async def test_pause_keeps_ownership_and_leaves_the_sources_off(hass: HomeAssistant, hass_storage, env, freezer) -> None:
+    room = await owned_room(hass, hass_storage, freezer)
+    env.clear()
+    await switch(hass, PAUSED, True)
+    assert room.dormant_reason == "paused" and room.took_over
+    assert env.calls == []
+    assert hass.states.get(WEEKDAY_ID).state == "off" and hass.states.get(WEEKEND_ID).state == "off"
+    freezer.move_to(dt_util.utcnow() + timedelta(seconds=300))
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=301))
+    await settle(hass)
+    await switch(hass, PAUSED, False)
+    assert env.calls == [] and room.took_over
+    assert issue(hass, ISSUE_SOURCE_ENABLED, room.entry) is None
+
+
+async def test_active_off_hands_back_even_while_paused(hass: HomeAssistant, hass_storage, env, freezer) -> None:
+    room = await owned_room(hass, hass_storage, freezer)
+    await switch(hass, PAUSED, True)
+    env.clear()
+    await switch(hass, ACTIVE, False)
+    assert not room.took_over and room.dormant_reason == "disabled"
+    assert sorted(env.calls_for("turn_on")) == sorted(SOURCES)
+    assert hass.states.get(WEEKDAY_ID).state == "on"
+    # Active back on while still paused: Hearth owns the room again and stays dormant
+    env.clear()
+    await switch(hass, ACTIVE, True)
+    assert room.took_over and room.dormant_reason == "paused"
+    assert sorted(env.calls_for("turn_off")) == sorted(SOURCES)
+
+
+async def test_pause_survives_a_reload_and_the_sources_stay_off(hass: HomeAssistant, hass_storage, env, freezer) -> None:
+    room = await owned_room(hass, hass_storage, freezer)
+    await switch(hass, PAUSED, True)
+    assert await hass.config_entries.async_reload(room.entry.entry_id)
+    await hass.async_block_till_done()
+    reloaded = hass.data[DOMAIN]["rooms"][room.entry.entry_id]
+    assert reloaded.dormant_reason == "paused" and reloaded.took_over
+    assert hass.states.get(WEEKDAY_ID).state == "off" and hass.states.get(WEEKEND_ID).state == "off"
+    assert hass.states.get(PAUSED).state == "on"
+
+
+async def test_a_reenabled_source_is_switched_off_again(hass: HomeAssistant, hass_storage, env, freezer) -> None:
+    room = await owned_room(hass, hass_storage, freezer)
+    events = async_capture_events(hass, EVENT_DIAGNOSTIC)
+    env.clear()
+    env.set_state(WEEKDAY_ID, "on")  # the Home Mode automation switches every schedule on
+    await settle(hass)
+    assert env.calls_for("turn_off") == [WEEKDAY_ID]
+    assert hass.states.get(WEEKDAY_ID).state == "off" and room.took_over
+    assert any(e.data["kind"] == "scheduler_source_reenabled" and WEEKDAY_ID in e.data["message"] for e in events)
+    # Switched off again at once: no repair, even after the two minute check
+    freezer.move_to(dt_util.utcnow() + timedelta(seconds=130))
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=131))
+    await settle(hass)
+    assert issue(hass, ISSUE_SOURCE_ENABLED, room.entry) is None
+
+
+async def test_the_schedulers_slot_after_the_switch_event_is_not_an_override(
+    hass: HomeAssistant, hass_storage, env, services, freezer
+) -> None:
+    room = await owned_room(hass, hass_storage, freezer)
+    hass.data[DOMAIN]["defaults"]["learn_from_automations"] = True  # so only the grace window can explain the absence of a ledger entry
+    env.set_state(WEEKDAY_ID, "on")
+    await settle(hass)
+    assert hass.states.get(WEEKDAY_ID).state == "off"
+    # The Scheduler had enabled itself and now fires its slot: comfort, while Hearth's block is eco
+    set_vtherm(hass, preset="comfort", current=18.0, target=20.5)
+    await settle(hass)
+    assert not room.standdown_active and room.ledger.entries == []
+    assert room.learning["ignored"][-1]["reason"] == "scheduler_source"
+    assert room.last_external_change is None
+    assert services["set_preset"][-1].data == {"entity_id": VTHERM, "preset_mode": "eco"}  # Hearth's own block, put back
+
+
+async def test_the_schedulers_slot_before_the_switch_event_is_taken_back(hass: HomeAssistant, hass_storage, env, services, freezer) -> None:
+    room = await owned_room(hass, hass_storage, freezer)
+    hass.data[DOMAIN]["defaults"]["learn_from_automations"] = True  # an override that would be learnt, so there is something to undo
+    # The write beats the switch event: Hearth reads it as an override first...
+    set_vtherm(hass, preset="comfort", current=18.0, target=20.5)
+    env.set_state(WEEKDAY_ID, "on")
+    await settle(hass)
+    # ...and takes it back when the source turns out to have just been switched on
+    assert not room.standdown_active and room.ledger.entries == []
+    assert room.last_external_change is None and room.last_external_change_at is None
+    assert room.learning["ignored"][-1]["reason"] == "scheduler_source" and "last_override" not in room.learning
+    assert hass.states.get(WEEKDAY_ID).state == "off"
+    assert services["set_preset"][-1].data == {"entity_id": VTHERM, "preset_mode": "eco"}
+
+
+async def test_a_change_after_the_grace_window_is_a_real_override(hass: HomeAssistant, hass_storage, env, services, freezer) -> None:
+    room = await owned_room(hass, hass_storage, freezer)
+    env.set_state(WEEKDAY_ID, "on")
+    await settle(hass)
+    freezer.tick(timedelta(seconds=20))  # source_reenable_grace_s is 15
+    set_vtherm(hass, preset="comfort", current=18.0, target=20.5)
+    await settle(hass)
+    assert room.standdown_active and room.standdown.cause == "automation_preset"
+    assert room.learning["ignored"][-1]["reason"] == "automation"
+
+
+async def test_a_reenabled_source_while_paused_is_switched_off_and_nothing_is_written(
+    hass: HomeAssistant, hass_storage, env, services, freezer
+) -> None:
+    room = await owned_room(hass, hass_storage, freezer)
+    await switch(hass, PAUSED, True)
+    env.clear()
+    env.set_state(WEEKEND_ID, "on")
+    set_vtherm(hass, preset="comfort", current=18.0, target=20.5)  # the Scheduler's slot
+    await settle(hass)
+    assert env.calls_for("turn_off") == [WEEKEND_ID] and hass.states.get(WEEKEND_ID).state == "off"
+    assert services["set_preset"] == [] and not room.standdown_active  # dormant: not Hearth's to put back until the pause ends
+    await switch(hass, PAUSED, False)
+    assert services["set_preset"][-1].data["preset_mode"] == "eco"  # unpausing applies the current block
+
+
+async def test_a_source_switched_on_while_hearth_does_not_own_the_room_is_left_alone(
+    hass: HomeAssistant, hass_storage, env, freezer
+) -> None:
+    room = await owned_room(hass, hass_storage, freezer)
+    await room.async_set_setting("schedule", False)  # handed back: the sources are on
+    env.clear()
+    env.set_state(WEEKDAY_ID, "off")
+    await settle(hass)
+    env.set_state(WEEKDAY_ID, "on")
+    await settle(hass)
+    assert env.calls == [] and hass.states.get(WEEKDAY_ID).state == "on"
+
+
+async def test_a_switch_off_that_does_not_stick_is_retried_later(hass: HomeAssistant, hass_storage, env, freezer) -> None:
+    room = await owned_room(hass, hass_storage, freezer)
+    env.stuck.add(WEEKDAY_ID)
+    env.clear()
+    env.set_state(WEEKDAY_ID, "on")
+    await settle(hass)
+    assert env.calls_for("turn_off") == [WEEKDAY_ID]  # once, straight away
+    freezer.tick(timedelta(seconds=30))
+    await room.async_evaluate("tick")
+    assert env.calls_for("turn_off") == [WEEKDAY_ID, WEEKDAY_ID]  # and again on a later evaluation
+    env.stuck.clear()
+    freezer.tick(timedelta(seconds=30))
+    await room.async_evaluate("tick")
+    assert hass.states.get(WEEKDAY_ID).state == "off"
