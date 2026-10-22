@@ -7,6 +7,7 @@ Application of corrections sits behind the separate `apply_learning` switch.
 
 from __future__ import annotations
 
+import copy
 import logging
 from datetime import datetime, timedelta
 from typing import Any
@@ -33,6 +34,11 @@ from .vtherm import snapshot_from_state
 
 _LOGGER = logging.getLogger(__name__)
 
+ORIGIN_HUMAN = "human"
+ORIGIN_AUTOMATION = "automation"
+# A preset-number edit by a person reaches the climate entity a moment later without their context (D47)
+_NUMBER_CONTEXT_WINDOW_S = 10
+
 
 class LearningMixin:
     """Mixed into HearthRoom, first in the MRO so its hooks win."""
@@ -41,6 +47,7 @@ class LearningMixin:
     ledger: Ledger
 
     def _init_learning(self) -> None:
+        self._override_undo: dict[str, Any] | None = None
         self.standdown = StandDown()
         self.ledger = Ledger()
 
@@ -74,6 +81,21 @@ class LearningMixin:
 
     # ------------------------------------------------------------- detection
 
+    def _change_origin(self, new, number_entity: str | None = None) -> str:
+        """D47: a change is a person's when its context carries a user, otherwise it came from an automation,
+        script, Scheduler or integration. A preset-number edit is judged on the number's own state as well."""
+        if self.const("learn_from_automations") or new.context.user_id is not None:
+            return ORIGIN_HUMAN
+        if number_entity:
+            number = self.hass.states.get(number_entity)
+            if (
+                number is not None
+                and number.context.user_id is not None
+                and (dt_util.utcnow() - number.last_changed).total_seconds() <= _NUMBER_CONTEXT_WINDOW_S
+            ):
+                return ORIGIN_HUMAN
+        return ORIGIN_AUTOMATION
+
     def _on_vtherm_change(self, old, new) -> None:
         """Detect preset and target changes Hearth did not make."""
         if old is None or new is None:
@@ -101,28 +123,82 @@ class LearningMixin:
                     magnitude = new_temp - old_temp
                 elif old_target is not None and new_target is not None:
                     magnitude = new_target - old_target
-            self.last_external_change_at = now
-            self.last_external_change = {"kind": kind, "from": old_preset, "to": new_preset, "magnitude": magnitude, "at": now.isoformat()}
-            self._handle_override(now, kind, old_preset, new_preset, magnitude)
+            change = {"kind": kind, "from": old_preset, "to": new_preset, "magnitude": magnitude, "at": now.isoformat()}
+            self._record_external_change(now, kind, old_preset, new_preset, magnitude, change, self._change_origin(new))
             return
         if old_target is not None and new_target is not None and abs(new_target - old_target) > 0.01:
             # Same preset, target moved: a preset-temp number edit (ours, or someone's) or a manual setpoint.
+            number_entity = None
             for preset in (new_preset,) if new_preset else ():
-                entity_id = self.vtherm.preset_number_entity(preset)
-                if entity_id and self.write_log.made_by_us(entity_id, new_target, now, window):
+                number_entity = self.vtherm.preset_number_entity(preset)
+                if number_entity and self.write_log.made_by_us(number_entity, new_target, now, window):
                     return
             magnitude = new_target - old_target
-            self.last_external_change_at = now
-            self.last_external_change = {
-                "kind": "temp",
-                "from": old_target,
-                "to": new_target,
-                "magnitude": magnitude,
-                "at": now.isoformat(),
-            }
-            self._handle_override(now, "temp", new_preset, new_preset, magnitude)
+            change = {"kind": "temp", "from": old_target, "to": new_target, "magnitude": magnitude, "at": now.isoformat()}
+            self._record_external_change(now, "temp", new_preset, new_preset, magnitude, change, self._change_origin(new, number_entity))
 
-    def _handle_override(self, now: datetime, kind: str, old_preset: str | None, new_preset: str | None, magnitude: float | None) -> None:
+    def _record_external_change(
+        self,
+        now: datetime,
+        kind: str,
+        old_preset: str | None,
+        new_preset: str | None,
+        magnitude: float | None,
+        change: dict[str, Any],
+        origin: str,
+    ) -> None:
+        """A change Hearth did not make: the Scheduler's (D48), or somebody's. Somebody's is judged by `origin` (D47)."""
+        if self.scheduler_grace_active(now):
+            self._ignore_override(now, kind, "scheduler_source")
+            self.request_reapply()
+            return
+        self._capture_override_undo(now)
+        self.last_external_change_at = now
+        self.last_external_change = {**change, "origin": origin}
+        self._handle_override(now, kind, old_preset, new_preset, magnitude, origin)
+
+    def _capture_override_undo(self, now: datetime) -> None:
+        """Remember what an external change is about to alter, so a Scheduler slot that turns out to have caused it
+        (its source switch event arrives after its write, D48) can be taken back."""
+        self._override_undo = {
+            "at": now,
+            "standdown": self.standdown.to_dict(),
+            "ledger": self.ledger.to_dict(),
+            "last_override": copy.deepcopy(self.learning.get("last_override")),
+            "ignored": len(self.learning.get("ignored", [])),
+            "external_at": self.last_external_change_at,
+            "external": self.last_external_change,
+        }
+
+    def undo_recent_override(self, now: datetime) -> bool:
+        """Take back the stand-down and ledger entry of an external change made within the grace window."""
+        undo = self._override_undo
+        self._override_undo = None
+        grace = timedelta(seconds=float(self.const("source_reenable_grace_s")))
+        if undo is None or now - undo["at"] > grace:
+            return False
+        self.standdown = StandDown.from_dict(undo["standdown"])
+        self.ledger = Ledger.from_dict(undo["ledger"])
+        if undo["last_override"] is None:
+            self.learning.pop("last_override", None)
+        else:
+            self.learning["last_override"] = undo["last_override"]
+        del self.learning.setdefault("ignored", [])[undo["ignored"] :]
+        kind = (self.last_external_change or {}).get("kind", "preset")
+        self.last_external_change_at = undo["external_at"]
+        self.last_external_change = undo["external"]
+        self._ignore_override(now, kind, "scheduler_source")
+        return True
+
+    def _handle_override(
+        self,
+        now: datetime,
+        kind: str,
+        old_preset: str | None,
+        new_preset: str | None,
+        magnitude: float | None,
+        origin: str = ORIGIN_HUMAN,
+    ) -> None:
         if not self.enabled(SWITCH_LEARNING):
             return
         if self.dormant:
@@ -132,7 +208,11 @@ class LearningMixin:
         if old_preset not in affected and not (kind == "preset" and new_preset in affected):
             self._ignore_override(now, kind, "unaffected_preset")
             return
-        self._start_standdown(now, f"manual_{kind}")
+        self._start_standdown(now, f"{'manual' if origin == ORIGIN_HUMAN else 'automation'}_{kind}")
+        if origin != ORIGIN_HUMAN:
+            # D47: Hearth stays out of the automation's way but does not learn from it
+            self._ignore_override(now, kind, "automation")
+            return
         self._record_override(now, kind, old_preset, new_preset, magnitude)
 
     def _record_override(self, now: datetime, kind: str, old_preset: str | None, new_preset: str | None, magnitude: float | None) -> None:
@@ -207,7 +287,7 @@ class LearningMixin:
         )
 
     def learned_target_offset(self) -> float:
-        if not self.enabled(SWITCH_APPLY_LEARNING):
+        if not self.wants(SWITCH_APPLY_LEARNING):
             return 0.0
         total = self._correction(BUCKET_BASELINE)
         t_rm = self.running_mean.t_rm
@@ -217,12 +297,12 @@ class LearningMixin:
         return max(-bound, min(bound, total))
 
     def learned_skip_threshold_offset(self) -> float:
-        if not self.enabled(SWITCH_APPLY_LEARNING):
+        if not self.wants(SWITCH_APPLY_LEARNING):
             return 0.0
         return self._correction(BUCKET_SKIP)
 
     def learned_safety_factor_multiplier(self) -> float:
-        if not self.enabled(SWITCH_APPLY_LEARNING):
+        if not self.wants(SWITCH_APPLY_LEARNING):
             return 1.0
         pct = float(self.const("learning_safety_factor_bound_pct")) / 100.0
         c = self._correction(BUCKET_PREHEAT) / float(self.const("learning_target_bound"))
@@ -243,6 +323,7 @@ class LearningMixin:
             "would_apply": self._correction(bucket),
             "applying": self.enabled(SWITCH_APPLY_LEARNING),
             "recording": self.enabled(SWITCH_LEARNING),
+            **self.last_reset_attrs(),
             "half_life_days": self.const("learning_half_life_days"),
             "min_events": self.const("learning_min_events"),
         }
@@ -251,6 +332,9 @@ class LearningMixin:
 
     async def async_service_override(self, minutes: float | None) -> None:
         now = dt_util.utcnow()
+        if self.observing:
+            self._diagnostic("override_service", "Observe only: no stand-down started, Hearth is not controlling this room")
+            return
         self._start_standdown(now, "service", minutes)
         if self.skip_active:
             await self._end_skip(now, "override_service", restore=True)
@@ -261,6 +345,8 @@ class LearningMixin:
         valid = (*BUCKETS, RESET_WARMING_RATE)
         if bucket is not None and bucket not in valid:
             raise ServiceValidationError(f"Unknown bucket {bucket!r}; expected one of {', '.join(valid)}")
+        # D41: keep what is about to be cleared so hearth.undo_reset can put it back
+        await self._stash_reset(bucket)
         if bucket == RESET_WARMING_RATE:
             # D38: the warming-rate model is not a ledger bucket. Clear it, drop any run in progress
             # (it was measured against the same sensor) and the cached preheat plan.
@@ -272,8 +358,7 @@ class LearningMixin:
         else:
             self.ledger.reset(bucket)
             self._diagnostic("reset_learning", f"Ledger reset ({bucket or 'all buckets'})")
-        self._schedule_save()
-        await self.async_evaluate("reset_learning")
+        await self._async_commit_learning("reset_learning")
 
 
 def _f(value) -> float | None:

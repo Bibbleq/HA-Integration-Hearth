@@ -6,7 +6,7 @@ Python 3.14, hassfest, and HACS validation.
 
 | Check | State |
 |---|---|
-| pytest (289 tests at 0.6.0: 186 pure-core, 103 HA-level) | green on CI |
+| pytest (435 tests at 0.7.0: 246 pure-core, 189 HA-level) | green on CI |
 | hassfest | green |
 | HACS validation | strict since the repo went public (see D18) |
 
@@ -105,6 +105,60 @@ real Versatile Thermostat or a real weather integration:
   sensor for bank holidays (D30). Verify on the live system that `specific_states.last_central_mode`
   reads `Frost protection` when you set central frost, and that the workday sensor's `check_date`
   service answers for future dates.
+- **0.7.0**: learnt values can be exported, imported and restored per room, and a reset is reversible
+  (D39-D44). New actions `hearth.export_learning` (response data, `parts`), `hearth.import_learning` (`data`,
+  `parts`; validates everything before applying) and `hearth.undo_reset`; `hearth.reset_learning` now stashes what
+  it clears as `last_reset` in the room store (no store migration; 0.6.x stores load unchanged); `last_reset_at` and
+  `last_reset_bucket` on the warming-rate and `learning_<bucket>` sensors and `room.last_reset` in the diagnostics
+  download. Also fixes the Hearth actions disappearing after a reload of the only room. Tests: 435 (was 290).
+  Verify on the live system:
+  1. Developer Tools > Actions, YAML mode: `hearth.export_learning` with `vtherm_entity_id` returns the room's
+     blob (`format`, `version`, `parts`) and with no room returns `rooms`; the response is readable and complete
+     (a full ledger is tens of kilobytes, check the UI shows all of it).
+  2. `reset_learning` with `bucket: warming_rate` on a room with runs, then `undo_reset`: `sensor.hearth_<room>_warming_rate`
+     `evidence_count` and constants come back, and `last_reset_at` is set while stashed and empty afterwards.
+  3. Restart Home Assistant between a reset and its undo: `last_reset_at` survives and the undo still works.
+  4. Reload the integration (change an option on the only room) and check the actions are still listed.
+  5. Import an export into a room after deleting and re-adding it: the warning about a different VTherm appears
+     only when the VTherm entity differs, and the seed hold does not restart (`seed_hold_active` stays false).
+  6. A deliberately broken `data` (wrong `version`, a bad second part) is refused with a readable message and the
+     room is unchanged.
+  7. The `script` example in the README with `persistent_notification.create`: check how long a real export is in
+     a notification before relying on it as a backup.
+
+  Also in 0.7.0, from the first live day of the Scheduler take-over (D45-D48): `switch.hearth_paused`, changes
+  made by automations no longer learnt from, and a re-enabled Scheduler source switched off again. Verify:
+  8. `switch.hearth_paused` on: every `binary_sensor.hearth_<room>_dormant` reads on with reason `paused`, nothing is
+     written to VTherm, the owned Scheduler schedules stay off (check the Scheduler card), and it survives a restart.
+     `switch.hearth_active` off while paused still switches the schedules back on.
+  9. Home Mode automation, Away branch pauses, Home branch unpauses: on unpause every room whose schedule switch is on
+     switches to the preset of its current block within seconds, even after a pre-arrival warm-up set comfort, and
+     `hearth_diagnostic` shows kind `resumed`.
+  10. Turn a Hearth-owned Scheduler schedule on by hand: it goes off again within a second, a `hearth_diagnostic` of
+      kind `scheduler_source_reenabled` appears, the room is not stood down, nothing lands in the ledger (the
+      stand-down sensor's `recent_ignored_overrides` shows `scheduler_source`) and Hearth's block is back. Do it with
+      the pause on and off. If you can make `switch.turn_off` fail, the repair appears two minutes later.
+  11. Change a preset from the dashboard (a person) and from an automation: the first stands the room down and lands in
+      the ledger; the second stands it down (`cause` `automation_preset`, `last_origin` `automation`) but adds only an
+      `automation` entry to `recent_ignored_overrides`. Check that a person's edit of a preset temperature number is
+      still learnt (VTherm moves its own target afterwards without the person's context, which Hearth bridges via the
+      number's own state; confirm on the live system).
+  12. Check the context of the Scheduler's own preset writes: the grace window assumes they carry no user.
+
+  Observe-only rooms (D49-D53):
+  13. Upgrade: the Living Room and Office have `switch.hearth_<room>_observe` off and behave exactly as before. Add a
+      new test room: it starts with observe on, and a restart keeps whichever state you left it in.
+  14. Observing: change the room's adaptive slope, wait for a Scheduler preset change, and confirm nothing is written to
+      VTherm (compare the comfort-target sensor, which still moves, with the preset number, which does not) and no
+      stand-down or ledger entry appears; `last_external_change` is still set. The Scheduler schedules stay on.
+  15. Leave an observing room for a few days on its Scheduler schedules: `evidence_count` on the warming-rate sensor
+      grows from the runs the Scheduler's preset changes start (the first run after each comfort block must not be
+      tainted by the change that began it; if runs never count, look at the order of the preset and heating events on
+      the live VTherm).
+  16. A VTherm with no preset numbers: observing shows no dormancy; switching observe off shows `no_preset_entities`
+      and the Repair, and the Repair clears when the numbers exist.
+  17. Switch observe off with the schedule switch on: the Scheduler schedules go off, the current block is applied, and
+      `next_block` shows `observe_only: false`. Switch it back on: the schedules come back on.
 - **0.6.1**: `hearth.reset_learning` with `bucket: warming_rate` clears the learned warming rate (D38). Use it
   after pointing a VTherm at a different temperature sensor.
 - **0.6.0**: Scheduler entities as a room's schedule source, with automatic take-over and fallback

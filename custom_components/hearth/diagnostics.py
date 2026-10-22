@@ -17,6 +17,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
         "entry": {"data": dict(entry.data), "options": dict(entry.options)},
         "defaults": hass.data[DOMAIN]["defaults"],
         "global_active": hass.data[DOMAIN]["global"].active,
+        "global_paused": hass.data[DOMAIN]["global"].paused,
         "room": room.diagnostics() if room else None,
         "forecast": forecast.cache(room.weather_entity_id).to_dict() if room else None,
     }

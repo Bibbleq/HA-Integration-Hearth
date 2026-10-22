@@ -45,7 +45,9 @@ from .const import (
     DOMAIN,
     DORMANT_DISABLED,
     DORMANT_NO_PRESET_ENTITIES,
+    DORMANT_PAUSED,
     EVENT_DIAGNOSTIC,
+    ISSUE_NO_PRESET_ENTITIES,
     NUMBER_COLD_MORNING,
     NUMBER_MAX_OFFSET,
     NUMBER_MIN_INDOOR_FLOOR,
@@ -58,6 +60,7 @@ from .const import (
     STORAGE_VERSION,
     SWITCH_ADAPTIVE,
     SWITCH_DEFAULTS,
+    SWITCH_OBSERVE,
     SWITCH_SCHEDULE,
     TIER2_DEFAULTS,
 )
@@ -68,6 +71,7 @@ from .mech_schedule import ScheduleMixin
 from .mech_setback import SetbackMixin
 from .mech_skip import SkipMixin
 from .mech_source import SchedulerSourceMixin
+from .mech_transfer import TransferMixin
 from .seed import async_daily_means
 from .vtherm import ClampViolation, VThermAdapter, VThermSnapshot
 
@@ -92,7 +96,7 @@ def parse_hhmm(value: str, fallback: str) -> time:
     return time(0, 0)
 
 
-class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, SetbackMixin):
+class HearthRoom(SchedulerSourceMixin, TransferMixin, LearningMixin, ScheduleMixin, SkipMixin, SetbackMixin):
     """Controller for one VTherm.
 
     Mixin order matters: a later phase's mixin overrides the hooks of an earlier one.
@@ -129,9 +133,12 @@ class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, 
         self.last_external_change: dict[str, Any] | None = None
         self._outdoor_frozen_reported = False
         self._missing_presets_reported = False
+        self.new_room = False
+        self._resume_pending = False  # the pause just ended: re-apply the current schedule block once the room is in scope
         self._init_schedule()
         self._init_source()
         self._init_learning()
+        self._init_transfer()
 
     # ------------------------------------------------------------- config access
 
@@ -179,20 +186,44 @@ class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, 
     def global_active(self) -> bool:
         return bool(self.hass.data[DOMAIN]["global"].active)
 
-    def enabled(self, key: str) -> bool:
+    @property
+    def global_paused(self) -> bool:
+        return bool(self.hass.data[DOMAIN]["global"].paused)
+
+    @property
+    def observing(self) -> bool:
+        """D49: the room learns but Hearth writes nothing to it."""
+        return self.switch(SWITCH_OBSERVE)
+
+    def wants(self, key: str) -> bool:
+        """The mechanism switch as configured, whether or not observing is holding it back (for showing what Hearth would do)."""
         return self.global_active and self.switch(key)
+
+    def enabled(self, key: str) -> bool:
+        """The mechanism may act: its switch is on, Hearth is active, and the room is not observe-only (D49)."""
+        return self.wants(key) and (key == SWITCH_OBSERVE or not self.observing)
 
     async def async_set_setting(self, key: str, value: Any) -> None:
         self.settings[key] = value
         self._schedule_save()
+        if key == SWITCH_OBSERVE:
+            await self._store.async_save(self._data_to_save())  # going live or stepping back is not left to the 30 s save
+            self._diagnostic(
+                "observe", "Observe only: Hearth writes nothing to this room" if value else "Observe off: Hearth is in control of this room"
+            )
         await self.async_evaluate("setting")
-        if key == SWITCH_SCHEDULE:
-            await self._reconcile_peers()  # rooms sharing a Scheduler source depend on this switch
+        if key in (SWITCH_SCHEDULE, SWITCH_OBSERVE):
+            await self._reconcile_peers()  # rooms sharing a Scheduler source depend on these switches
 
     # ------------------------------------------------------------- lifecycle
 
     async def async_setup(self) -> None:
         await self._async_load()
+        if self.new_room:
+            self._diagnostic(
+                "observe", "New room: observing only, so it learns before Hearth controls it. Turn the Observe switch off to go live"
+            )
+            self._schedule_save()
         self.hass.data[DOMAIN]["forecast"].subscribe(self.weather_entity_id)
         await self._async_seed_if_needed()
         self._unsubs.append(async_track_state_change_event(self.hass, [self.vtherm.entity_id], self._on_vtherm_event))
@@ -254,8 +285,12 @@ class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, 
     # ------------------------------------------------------------- persistence
 
     async def _async_load(self) -> None:
-        data = await self._store.async_load() or {}
-        self.settings = dict(data.get("settings", {}))
+        stored = await self._store.async_load()
+        # D49: a room with nothing stored yet is new and starts observing. Every store written before 0.7.0 has its
+        # settings (possibly empty), so an upgrade leaves a live room live.
+        self.new_room = stored is None or "settings" not in stored
+        data = stored or {}
+        self.settings = dict(data["settings"]) if not self.new_room else {SWITCH_OBSERVE: True}
         self.running_mean = RunningMeanState.from_dict(data.get("running_mean"))
         self.tracker = RunningMeanTracker(self.running_mean, alpha=float(self.const("alpha")))
         self.write_log = WriteLog.from_list(data.get("write_log"), int(self.const("write_log_len")))
@@ -267,6 +302,7 @@ class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, 
         self.last_external_change_at = _dt(data.get("last_external_change_at"))
         self.last_external_change = data.get("last_external_change")
         self._load_mechanisms()
+        self._load_transfer_state(data.get("last_reset"))
         self.settings_loaded = True
 
     def _load_mechanisms(self) -> None:
@@ -293,6 +329,7 @@ class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, 
             "mechanisms": self._dump_mechanisms(),
             "last_external_change_at": _iso(self.last_external_change_at),
             "last_external_change": self.last_external_change,
+            "last_reset": self.last_reset,
         }
 
     def _schedule_save(self) -> None:
@@ -409,6 +446,7 @@ class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, 
         self._sample_outdoor(now)
         self._maybe_roll(now)
         self._update_dormant()
+        self._handle_resume()
         await self._reconcile_source(now)
         await self._evaluate_adaptive(now, force_write)
         await self._evaluate_mechanisms(now, reason)
@@ -422,22 +460,49 @@ class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, 
         await self._evaluate_schedule(now)
 
     def _update_dormant(self) -> None:
-        if not self.global_active:
-            self.dormant_reason = DORMANT_DISABLED
-            return
-        reason = self.snapshot.dormant_reason
-        if reason is None and not self.vtherm.has_preset_numbers(self.affected_presets):
-            reason = DORMANT_NO_PRESET_ENTITIES
-            if not self._missing_presets_reported:
-                self._missing_presets_reported = True
-                self._diagnostic(
-                    "no_preset_entities",
-                    "VTherm preset temperature number entities not found. Untick 'use central configuration' "
-                    "for preset temperatures on this VTherm so it exposes number.<vtherm>_preset_comfort_temp.",
-                )
-        elif reason is None:
-            self._missing_presets_reported = False
+        reason = self._compute_dormant()
+        if self.dormant_reason == DORMANT_PAUSED and reason != DORMANT_PAUSED:
+            self._resume_pending = True  # D46: leaving the pause is a fresh start, handled in _handle_resume
         self.dormant_reason = reason
+
+    def _compute_dormant(self) -> str | None:
+        if not self.global_active:
+            return DORMANT_DISABLED  # hearth_active off wins over the pause: rooms are handed back
+        if self.global_paused:
+            return DORMANT_PAUSED
+        reason = self.snapshot.dormant_reason
+        if reason is not None:
+            return reason
+        # The preset numbers only matter for writing, so an observing room does not need them (D52).
+        if self.observing or self.vtherm.has_preset_numbers(self.affected_presets):
+            self._missing_presets_reported = False
+            self._set_issue(ISSUE_NO_PRESET_ENTITIES, None)
+            return None
+        if not self._missing_presets_reported:
+            self._missing_presets_reported = True
+            self._diagnostic(
+                "no_preset_entities",
+                "VTherm preset temperature number entities not found. Untick 'use central configuration' "
+                "for preset temperatures on this VTherm so it exposes number.<vtherm>_preset_comfort_temp.",
+            )
+        self._set_issue(ISSUE_NO_PRESET_ENTITIES, {"room": self.room_name, "vtherm": self.vtherm.entity_id})
+        return DORMANT_NO_PRESET_ENTITIES
+
+    def _handle_resume(self) -> None:
+        """D46: the pause ended and the room is in scope again.
+
+        Forget the stand-down and the "applied block" memory so this evaluation applies the CURRENT schedule block
+        at once (the schedule's usual "a manual change stands until the next block" rule would otherwise keep
+        whatever the occupancy automations set while Hearth was paused). Adaptive, skip, setback and preheat then
+        follow their normal rules in the same evaluation. Other dormancy (a window, away...) is not a fresh start.
+        """
+        if not self._resume_pending or self.dormant:
+            return
+        self._resume_pending = False
+        if self.standdown_active:
+            self.standdown.clear()
+        self.sched.pop("applied_key", None)
+        self._diagnostic("resumed", "Pause ended: applying the current schedule block")
 
     @property
     def dormant(self) -> bool:
@@ -542,6 +607,7 @@ class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, 
             "room": self.room_name,
             "vtherm": self.vtherm.entity_id,
             "dormant_reason": self.dormant_reason,
+            "global_paused": self.global_paused,
             "settings": self.settings,
             "running_mean": self.running_mean.to_dict(),
             "comfort": self.comfort.__dict__ if self.comfort else None,
@@ -554,6 +620,7 @@ class HearthRoom(SchedulerSourceMixin, LearningMixin, ScheduleMixin, SkipMixin, 
             "standdown": self.standdown.to_dict(),
             "ledger": self.ledger.to_dict(),
             "scheduler_source": self.source_diagnostics(),
+            "last_reset": self.last_reset,
         }
 
 

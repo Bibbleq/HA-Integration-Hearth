@@ -45,7 +45,8 @@ Then *Settings > Devices & services > Add integration > Hearth*. One Hearth room
 - VTherm 8.0 or newer (built and verified against 10.4).
 - The VTherm must expose its own preset temperature numbers. In the VTherm's config, **untick
   "use central configuration" for preset temperatures**; otherwise `number.<vtherm>_preset_comfort_temp`
-  does not exist and Hearth reports the room as dormant (`no_preset_entities`).
+  does not exist and Hearth reports the room as dormant (`no_preset_entities`, with a Repair). The numbers are only
+  needed to write, so a room that is observing does not need them.
 - Presence, window, safety and overpowering stay VTherm's job. Hearth is dormant while any of them is active.
 - The TRV side must be a plain actuator with no early-start or smart schedule of its own (on a Tado estate: flat
   temperatures in the Tado app, Early Start off). Hearth's preheat must be the only warm-up brain.
@@ -56,7 +57,9 @@ Then *Settings > Devices & services > Add integration > Hearth*. One Hearth room
 
 | Entity | Default | Purpose |
 |---|---|---|
-| `switch.hearth_active` | on | Global kill switch (one for the whole integration) |
+| `switch.hearth_active` | on | Global kill switch (one for the whole integration). Off hands every room back: Scheduler schedules Hearth switched off are switched back on |
+| `switch.hearth_paused` | off | Global pause (one for the whole integration). On makes every room dormant (`paused`) but keeps ownership: Scheduler schedules Hearth switched off **stay off**. Off puts each room straight back on its current schedule block. See [Working with occupancy / home-away automations](#working-with-occupancy--home-away-automations) |
+| `switch.hearth_<room>_observe` | off (on for a new room) | Observe only: the room learns but Hearth writes nothing to it. See [Observing a room before taking it over](#observing-a-room-before-taking-it-over) |
 | `switch.hearth_<room>_adaptive_comfort` | on | Phase 1 |
 | `switch.hearth_<room>_forecast_skip` | off | Phase 2 |
 | `switch.hearth_<room>_setback_depth` | off | Phase 2 |
@@ -89,6 +92,8 @@ hearth:
     max_forecast_age_hours: 3
     safety_factor: 1.15
     max_preheat_min: 120
+    learn_from_automations: false   # true: learn from automation-made changes too
+    source_reenable_grace_s: 15     # a preset change this soon after a Scheduler source comes on is the Scheduler's
 ```
 
 Unknown keys are ignored with a warning. Nothing in Tier 3 is required for sane behaviour.
@@ -108,10 +113,11 @@ Each room is a device named *Hearth \<Room\>*. Diagnostics (read-only):
 | `sensor.hearth_<room>_next_block` | Phase 3: "comfort by 06:30, preheat est. 05:52". Attributes include `schedule_source` (`scheduler` / `explicit` / `none`), `source_entities`, `source_blocked_reason` and `derived_at` |
 | `sensor.hearth_<room>_stand_down` | none / until (local timestamp), with cause and the last external change |
 | `sensor.hearth_<room>_learning_<bucket>` | Phase 4: decayed mean bias in C per bucket (`preheat_shortfall`, `slope_error`, `skip_failure`, `baseline_error`) with evidence count and the correction that would apply |
-| `binary_sensor.hearth_<room>_dormant` | On when Hearth is leaving the room alone, with reason (away / central_frost / window / safety / overpowering / off / unavailable / disabled / no_preset_entities) |
+| `binary_sensor.hearth_<room>_dormant` | On when Hearth is leaving the room alone, with reason (away / central_frost / window / safety / overpowering / off / unavailable / disabled / paused / no_preset_entities). Observe-only is not a dormant reason; the sensor, the comfort-target sensor and the next-block sensor carry an `observe_only` attribute |
 
-Hearth also fires `hearth_diagnostic` events (seeding, outdoor sensor loss, refused writes) and provides a
-config-entry diagnostics download.
+Hearth also fires `hearth_diagnostic` events (seeding, outdoor sensor loss, refused writes, learning imports and
+undos) and provides a config-entry diagnostics download. The warming-rate sensor and the four `learning_<bucket>`
+sensors carry `last_reset_at` and `last_reset_bucket` while a reset can still be undone.
 
 ## Services
 
@@ -121,9 +127,167 @@ config-entry diagnostics download.
 | `hearth.recompute` | room (optional), `force` | Force an adaptive recompute and write |
 | `hearth.refresh_forecast` | room (optional) | Fetch the forecast now |
 | `hearth.set_schedule` | room, `schedule` | Replace a room's warm-by schedule (phase 3). Refused for a room that takes its schedule from Scheduler entities |
-| `hearth.reset_learning` | room, `bucket` (optional) | Clear the ledger, or one bucket (phase 4). `bucket: warming_rate` instead clears the learned warming rate and any run in progress, back to the 1.0 C/h default; do this after changing the VTherm's temperature sensor. An empty bucket never touches the warming rate |
+| `hearth.reset_learning` | room, `bucket` (optional) | Clear the ledger, or one bucket (phase 4). `bucket: warming_rate` instead clears the learned warming rate and any run in progress, back to the 1.0 C/h default; do this after changing the VTherm's temperature sensor. An empty bucket never touches the warming rate. What is cleared is kept so `hearth.undo_reset` can bring it back |
+| `hearth.export_learning` | room (optional), `parts` (optional) | Return a room's learnt values as response data: `warming_rate`, `ledger`, `running_mean`. Name one room for its data directly, none for every room under `rooms`. Writes nothing to disk |
+| `hearth.import_learning` | room, `data`, `parts` (optional) | Replace a room's learnt values with data from `export_learning`. Everything is checked before anything is applied |
+| `hearth.undo_reset` | room | Put back what the last `reset_learning` cleared in that room |
 
 `room` is either `entry_id` (config entry selector) or `vtherm_entity_id` (the climate entity the room drives).
+
+## Backing up and moving learning
+
+What Hearth learns lives in one small file per room (`.storage/hearth.room.climate_living_room` for `climate.living_room`): the **warming rate**
+(how fast the room warms, from clean heating runs), the **override ledger** (your manual corrections) and the
+**running mean** of outdoor temperature. A normal Home Assistant backup already includes it, but restoring a
+backup is all or nothing: it rolls back everything else in Home Assistant too. Hearth adds a way to take the
+learnt values out, put them back, and undo a reset, per room.
+
+- **Diagnostics download** (the room's device page, *Download diagnostics*) contains the learnt values for
+  reading: `room.mechanisms.warming`, `room.ledger` and `room.running_mean`, plus `room.last_reset` while a reset
+  can be undone. It is a snapshot to look at or keep, not something to feed back in as it stands, though its
+  three parts have the same shape as the export (see the last example below).
+- **`hearth.export_learning`** returns the values as action response data. Nothing is written to disk. With a
+  room named (`entry_id` or `vtherm_entity_id`) the response is that room's data:
+
+  ```json
+  {"format": "hearth.learning", "version": 1, "exported_at": "2026-10-22T07:30:00+00:00", "hearth_version": "0.7.0",
+   "room": "Living Room", "vtherm": "climate.living_room",
+   "parts": {"warming_rate": {...}, "ledger": {...}, "running_mean": {...}}}
+  ```
+
+  With no room named you get every room: `{"rooms": {"climate.living_room": {...}, "climate.bedroom": {...}}}`.
+  `parts` (a list of `warming_rate`, `ledger`, `running_mean`) limits what is exported; the default is all
+  three. A part with nothing learnt yet is left out.
+- **`hearth.import_learning`** takes a room and `data` (the object above), and optionally `parts` (default: every
+  part the data holds). The whole object is checked first (format, version, every selected part) and nothing is
+  applied unless all of it is good. Each imported part then *replaces* the room's current one. Importing a
+  warming rate also drops a heating run in progress. An imported running mean keeps its own seeding time, so it
+  does not start another 48 h hold. Data exported from a different VTherm is allowed (that is how you restore a
+  rebuilt room) but logs a warning. The room is saved at once and recomputed.
+- **`hearth.reset_learning`** now keeps what it is about to clear, and **`hearth.undo_reset`** puts it back.
+  Only the latest reset is kept, and it is gone once undone. Undoing a single-bucket reset restores just that
+  bucket; anything learnt since the reset is kept alongside it. A reset that clears nothing leaves the previous
+  undo in place.
+
+Try it in *Developer Tools > Actions* (YAML mode shows the response):
+
+```yaml
+action: hearth.export_learning
+data:
+  vtherm_entity_id: climate.living_room
+```
+
+To restore, paste the response's object under `data:`; `parts` is optional:
+
+```yaml
+action: hearth.import_learning
+data:
+  vtherm_entity_id: climate.living_room
+  parts: [warming_rate]
+  data:
+    format: hearth.learning
+    version: 1
+    parts:
+      warming_rate:
+        a: 2.1
+        b: 0.05
+        runs: [[10.0, 1.6], [14.0, 1.4], [18.0, 1.2]]
+        max_runs: 30
+```
+
+The export is far too large for an `input_text` helper (255 characters), so do not try to keep it there. In
+a script, take it with `response_variable` and hand it to whatever should keep it:
+
+```yaml
+script:
+  hearth_backup_living_room:
+    sequence:
+      - action: hearth.export_learning
+        data:
+          vtherm_entity_id: climate.living_room
+        response_variable: learning
+      - action: persistent_notification.create
+        data:
+          title: Hearth learning, Living Room
+          message: "{{ learning | to_json }}"
+```
+
+A `notify` action, or any integration that writes a file, can take `{{ learning | to_json }}` in the same way
+if you want the backup somewhere that survives a restart. To use the diagnostics download instead, wrap its three
+parts: `data: {format: hearth.learning, version: 1, parts: {warming_rate: <room.mechanisms.warming>,
+ledger: <room.ledger>, running_mean: <room.running_mean>}}`.
+
+## Observing a room before taking it over
+
+A room can be added to Hearth and left to learn before Hearth controls it. While **observe only**
+(`switch.hearth_<room>_observe`) is on, Hearth writes nothing to the room: no adaptive comfort write, no skip,
+setback, schedule or preheat switching, no applied corrections, no stand-downs and no ledger entries (an external
+change is still noted as the last external change for diagnostics), and it never takes over Scheduler schedules, so
+whatever drives the room today keeps driving it. The room keeps learning: the warming-rate learner, the outdoor running
+mean, the Scheduler schedule derivation and the forecast fetches all carry on, and the comfort-target sensor and the
+next-block sensor (with its preheat plan) show what Hearth would do. Observe is not dormancy; a window, presence,
+safety and the other VTherm reasons still apply and still discard heating runs.
+
+**Which rooms observe.** A room whose store has no settings yet, which is every room added from this release on,
+starts with observe on. A room that was set up before 0.7.0 keeps its settings, which have no observe value, so it
+stays live; an upgrade changes nothing. (Removing a room and adding it back keeps its stored settings, learning and
+observe switch, as it always kept its learning.)
+
+1. **Add the room.** Add the VTherm as a Hearth room. It starts observing. Nothing about the room changes.
+2. **Attach the Scheduler schedules** (`scheduler_entity_ids` in the room options) and turn the room's schedule
+   switch on, plus any other mechanisms you want. Nothing is taken over while observing; the switches keep their values
+   for later.
+3. **Watch it.** `sensor.hearth_<room>_next_block` shows the derived schedule and the preheat Hearth would run.
+   `sensor.hearth_<room>_warming_rate` shows `learned` and `evidence_count` against `min_runs`: the warming rate is
+   learnt from the heating runs the Scheduler's own preset changes start, and is ready when `learned` is true.
+4. **Fix the preset numbers.** Observing needs no preset temperature numbers, but going live does. Untick "use
+   central configuration" for preset temperatures in the VTherm; it then creates the numbers at 7 C, so set them to the
+   room's real preset temperatures. Without them a live room is dormant (`no_preset_entities`) and a Repair says so.
+5. **Switch observe off.** That is going live: the room takes over its Scheduler schedules (if its schedule switch is
+   on and the shared-source guard allows it), applies the current block and writes as configured. Switching observe on
+   again for a taken-over room hands the schedules back.
+
+A caveat for step 3: if the VTherm reads its temperature from a radiator valve, the first runs overstate how fast the
+room warms. Give the VTherm a room sensor before trusting `evidence_count`, and if the sensor changes afterwards, clear
+what was learnt with `hearth.reset_learning` and `bucket: warming_rate` (it can be undone with `hearth.undo_reset`).
+
+Precedence: `switch.hearth_active` off (the room reads `disabled`, and it is handed back) beats the pause (`paused`),
+which beats observe. Switching observe on while a skip or setback is active ends it the way switching that mechanism off
+would, which restores what it had changed; after that nothing is written.
+
+## Working with occupancy / home-away automations
+
+Hearth predicts: it moves comfort and presets from the weather, the schedule and what it has learnt. Whether
+anyone is home is something you know, so it is better left to your own automations, which should decide
+*whether Hearth acts*, not fight it. The pattern:
+
+- **Away / Holiday branch:** `switch.turn_on` on `switch.hearth_paused`, then do what the away mode needs (a
+  temperature cap, a deep setback, the eco preset). Hearth is dormant while paused: it writes nothing, learns
+  nothing, ignores the changes you make, and keeps its Scheduler schedules switched off.
+- **Home / Guest branch:** `switch.turn_off` on `switch.hearth_paused`. Each room goes back to its current schedule
+  block at once (even if a pre-arrival warm-up had set comfort), and the adaptive comfort recompute runs. Do not
+  turn on the Scheduler schedules of rooms Hearth owns; if an automation does it anyway Hearth switches them off
+  again and puts its own block back.
+
+```yaml
+- choose:
+    - conditions: "{{ is_state('input_select.home_mode', ['Away', 'Holiday']) }}"
+      sequence:
+        - action: switch.turn_on
+          target: {entity_id: switch.hearth_paused}
+        # ...away temperature cap, deep setback...
+  default:
+    - action: switch.turn_off
+      target: {entity_id: switch.hearth_paused}
+```
+
+Pausing is not the kill switch. `switch.hearth_active` off hands every room back (Scheduler schedules come on), so
+use it when you want Hearth out of the picture; `switch.hearth_paused` on keeps ownership and leaves them off. With
+both set, `switch.hearth_active` off wins. The pause is remembered across restarts.
+
+Unpausing ends any stand-down (it is a fresh start) and applies the current schedule block of every room whose
+schedule switch is on; a skip, setback or preheat starts only by its usual rules. Leaving other kinds of dormancy
+(a window closing, a presence change) is unchanged: whatever was set meanwhile stands until the next block.
 
 ## Enabling each phase
 
@@ -146,6 +310,12 @@ Phases are meant to soak for a few weeks each. Everything is per room.
    recorded in the ledger. The `learning_*` sensors show the biases and the correction each bucket would
    apply. `apply_learned_corrections` is a second-winter flag: bounded corrections (+/- 1 C on targets,
    +/- 25 % on the preheat safety factor) after three consistent events, always inside the band clamps.
+   **Only a person's changes are learnt from.** A change counts as a person's when the state change carries a
+   user (`context.user_id`: the dashboard, the app, voice). A change with no user (an automation, a script,
+   Scheduler, another integration) still stands Hearth down for the room, so Hearth does not fight it, but it
+   is not recorded in the ledger; it appears in the stand-down sensor's `recent_ignored_overrides` with reason
+   `automation`, and `last_origin` on that sensor says `human` or `automation`. Set `learn_from_automations: true`
+   under `hearth: advanced:` to learn from both, as before 0.7.0. Hearth's own writes are never either.
 
 ### Schedule format
 
@@ -222,7 +392,14 @@ heating and you can read the derived schedule in `sensor.hearth_<room>_next_bloc
   every source schedule. It does the same at startup if the switch was already on.
 - Turning the schedule switch off, turning `switch.hearth_active` off, reloading or unloading the integration, or
   deleting the room makes Hearth call `switch.turn_on` on every source schedule, so Scheduler is the fallback.
-  Dormancy (window, away, frost, safety) and a stand-down are temporary and do not hand back.
+  Dormancy (window, away, frost, safety), the global pause (`switch.hearth_paused`) and a stand-down are temporary and do
+  not hand back.
+- If a source is switched back on while Hearth owns the room (an automation that turns all schedules on, a tap in
+  the Scheduler card, a Scheduler reload), Hearth calls `switch.turn_off` on it again straight away, whether or not
+  it is paused. The Scheduler fires its current slot the moment it is enabled; a preset change within
+  `source_reenable_grace_s` (15 s) of a source coming on is put down to the Scheduler: no stand-down, no ledger
+  entry (ignored with reason `scheduler_source`), and Hearth puts its own current block back (unless paused or
+  dormant). This holds whichever arrives first, the switch event or the preset write.
 - Hearth will not take over a schedule that also drives other climate entities unless each of them is a Hearth
   room with its schedule switch on, because switching it off would stop those rooms. It also will not take over when
   it has no usable schedule yet. Hearth cannot hand back if the integration files are deleted while it owns a room;
@@ -236,7 +413,8 @@ unavailable source is only a diagnostic event and a log line.
 | `scheduler_day_conflict` | Two source schedules cover the same day. Hearth does not apply the change and keeps the last good schedule |
 | `scheduler_shared_source` | A source also drives climate entities that are not Hearth rooms with the schedule switch on. Hearth does not take it over or apply it |
 | `scheduler_unsupported_action` | A slot is not a preset change (or has a sunrise/sunset time). That schedule is unusable and the change is not applied |
-| `scheduler_source_enabled` | A source schedule is still on two minutes after Hearth took the room over, so two systems may be changing presets. Turn it off, or hand the room back |
+| `no_preset_entities` | The room is live (not observing) but its VTherm has no per-room preset temperature numbers, so Hearth leaves it alone. Untick "use central configuration" for preset temperatures in the VTherm; it then creates the numbers at 7 C, so set them before Hearth takes over |
+| `scheduler_source_enabled` | A source schedule is still on two minutes after Hearth took the room over or switched it off again, so two systems may be changing presets (Hearth's own `switch.turn_off` is not working). Turn it off, or hand the room back |
 
 ## Safety behaviour
 

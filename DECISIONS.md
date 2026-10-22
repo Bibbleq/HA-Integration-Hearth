@@ -204,7 +204,7 @@ down, it just is not recorded. Changes while dormant (window open, frost, away..
 Three change kinds are detected from the climate entity's state: a preset switch Hearth did not make
 (`preset`), a preset switch to `none` with a target change (`setpoint`, VTherm's manual-temperature
 behaviour), and a target change within the same preset that does not match one of Hearth's own number
-writes (`temp`, a hand edit of the preset number).
+writes (`temp`, a hand edit of the preset number). From 0.7.0 only a person's change is also learnt from (D47).
 
 ## D27. Ledger magnitude for preset switches
 
@@ -307,7 +307,8 @@ update listener and reload the entry on every Scheduler edit.
 
 Ownership is "the room's schedule switch is on and the global `switch.hearth_active` is on", the existing
 `enabled(SWITCH_SCHEDULE)`. It is reconciled on every evaluation as a transition on an in-memory flag, so
-nothing is re-asserted every tick (a user who turns a source back on is told via a repair, not fought).
+nothing is re-asserted every tick. (0.6.0 only flagged a source that was turned back on, with a repair. From 0.7.0 Hearth
+switches it off again, see D48; the repair is now the fallback for a switch-off that does not stick.)
 
 - Not owned to owned: `switch.turn_off` on every source that exists. This also runs at entry setup when the
   switch was already on, which makes the sources off idempotently after a restart.
@@ -349,7 +350,7 @@ and goes, and all cleared on unload and removal:
 - `scheduler_shared_source`: `entities` are the sources, `detail` the other climate entities.
 - `scheduler_unsupported_action`: `entities` is the unusable schedule, `detail` says why.
 - `scheduler_source_enabled`: a source is still on `scheduler_enabled_check_s` (Tier 3, default 120) seconds
-  after Hearth took over. Checked by a one-shot timer and on every source state change; `entities` lists every
+  after Hearth took over, or (0.7.0, D48) after it last switched a re-enabled source off. Checked by a one-shot timer and on every source state change; `entities` lists every
   offender. One issue per room, with all entity ids in the description. It clears when the source goes off or
   the room is handed back.
 
@@ -373,3 +374,211 @@ measured about 7 C/h, and swapping in a room sensor left that run in the model w
 of deleting the room. An empty `bucket` keeps meaning "every ledger bucket" and does not touch the warming rate,
 so existing calls behave as before and a ledger reset never costs a winter of learned preheat. No automatic reset
 on a sensor change: Hearth does not see the VTherm's configuration, only its reported temperature.
+
+## D39. What "learning" is, and the export blob
+
+Learning is three parts, each a stable JSON shape taken straight from an existing `to_dict()`:
+
+- `warming_rate`: the `WarmingModel` (`a`, `b`, `runs` as `[delta, rate]` pairs, `max_runs`).
+- `ledger`: the override `Ledger` (every entry, every bucket's statistics, `max_entries`).
+- `running_mean`: the outdoor `RunningMeanState` (`t_rm`, `t_rm_day`, `seeded_at`, `frozen`, today's and the
+  completed day's accumulators, recent daily means).
+
+Everything else is transient and deliberately left out: the write log, stand-down, skip and setback state, the
+forecast cache, the heating run in progress, the preheat plan, the Scheduler-derived schedule, the settings
+switches and numbers. The blob is `{"format": "hearth.learning", "version": 1, "exported_at", "hearth_version",
+"room", "vtherm", "parts": {...}}`, and a part is present only if it has content (a warming model with no runs and
+no fit, an empty ledger and an unseeded running mean are left out). Because each part is the model's own
+`to_dict()`, the diagnostics download holds the same three shapes (`room.mechanisms.warming`, `room.ledger`,
+`room.running_mean`) and can be wrapped into a blob by hand. Parsing, validation, the content tests and the merge
+helpers are pure and live in `core/learning_io.py`; `mech_transfer.py` is the mixin that applies them to a room.
+
+## D40. `hearth.export_learning`
+
+Room selector as the other actions, plus `parts` (list; empty or missing means all three; an unknown name raises
+`ServiceValidationError`). Registered with `SupportsResponse.ONLY`. The response shape depends on the call, not on
+how many rooms happen to be installed, so scripts do not break when a second room is added: a call that names a
+room (`entry_id` or `vtherm_entity_id`) gets that room's bare blob; a call that names none gets
+`{"rooms": {"<vtherm entity id>": blob, ...}}`, even with one room. The integration writes nothing to disk. The
+blob is built from copies (`to_dict()`), so editing a response cannot reach live state.
+
+## D41. `hearth.import_learning`
+
+Needs exactly one room. `data` is the blob (an object); `parts` defaults to every part the blob holds, and asking
+for a part the blob lacks is an error. Validation happens in two passes and never half-applies: the blob's
+structure (format, version, part names) is always checked, and the shape of each *selected* part is checked in
+full (types, finite numbers, ISO times with an offset, bucket names, non-negative `b`, `t_rm` present with a
+`seeded_at`) into fresh model objects; only when every selected part parsed are any of them swapped in. A part
+that is not selected is not validated, so a good part can be taken from a blob whose other part is damaged.
+Any failure is a `ServiceValidationError` that names the field.
+
+Applying replaces the part wholesale. The warming model is clamped to the room's `max_learning_runs` (refitted
+only if runs had to be dropped); after it the heating run in progress and the preheat plan are dropped, as in D38.
+The running mean is replaced together with its tracker and does *not* start a new 48 h seed hold, because the
+imported state carries its own `seeded_at` (which is why a running mean without one is refused: `seed_hold_active`
+treats a missing `seeded_at` as "just seeded"). Importing into a room whose VTherm differs from the blob's
+`vtherm` is allowed, since that is the "room rebuilt" case, but logs a warning and names the source VTherm in the
+`import_learning` diagnostic event, which also names the parts. The store is saved immediately (not the 30 s
+coalesced save) and the room is re-evaluated with reason `import_learning`.
+
+## D42. Reversible reset: the `last_reset` stash
+
+Before `hearth.reset_learning` clears anything it stores, in the room store under `last_reset`,
+`{"at": ISO, "bucket": <bucket or null>, "blob": <export blob>}`. For `bucket: warming_rate` the blob holds the
+`warming_rate` part; for a ledger bucket, or an empty bucket (every ledger bucket), it holds the `ledger` part.
+Only the latest reset is kept. A reset that would clear nothing (an empty model or ledger, or an empty bucket) does
+not overwrite an earlier stash, so a stray second click on reset cannot destroy the way back. The reset itself now
+saves at once as well, so the stash is on disk before the next restart. `hearth.undo_reset` takes only a room,
+raises `ServiceValidationError` when nothing is stashed, applies the stash, clears `last_reset`, saves, and emits an
+`undo_reset` diagnostic.
+
+## D43. Undoing a single-bucket reset restores that bucket, and merges
+
+The stash for a ledger reset is the whole ledger as it was, so the blob stays a valid export that
+`import_learning` accepts. Undo does not import it wholesale, though: it restores only the reset bucket (or all
+four after an empty-bucket reset) and keeps everything else in the live ledger. Replacing the whole ledger would
+silently throw away overrides recorded in the other buckets between the reset and the undo, which is exactly when
+someone notices the reset was a mistake. The same reasoning applies to the warming rate: runs learnt since the
+reset are appended to the stashed runs and the model refitted. Entries recorded in a restored bucket since the
+reset are replayed onto the stashed statistics with the update the ledger uses when it records them, so the decay
+and weighting stay right. When nothing was learnt since the reset the result is exactly the pre-reset state,
+down to the fitted constants and the statistics. This diverges from the brief's "undo imports `last_reset.blob`"
+only where data would otherwise be lost.
+
+## D44. Persistence and visibility
+
+`last_reset` is a new top-level key in the room store. A key that is absent (any 0.6.x store) loads as "nothing to
+undo"; a stash that is damaged or does not parse as a blob is dropped with a warning. No store migration was
+needed, so `STORAGE_VERSION` stays at 1. `sensor.hearth_<room>_warming_rate` and the four
+`sensor.hearth_<room>_learning_<bucket>` sensors gain `last_reset_at` and `last_reset_bucket` (both None when
+nothing can be undone; the blob is never put in an attribute). The diagnostics download gains `room.last_reset`
+with the time, the bucket and the blob. The actions are `hearth.export_learning`, `hearth.import_learning` and
+`hearth.undo_reset`, with descriptions in `services.yaml`, `strings.json` and `translations/en.json`.
+
+Found while testing undo across a reload: unloading the last room removed the services and nothing put them
+back, because a config-entry reload runs `async_setup_entry` but not `async_setup`. After any options change on a
+single-room install every Hearth action disappeared until the next restart. `async_setup_entry` now calls the
+idempotent `async_setup_services`, with a regression test.
+
+## D45. Global pause: `switch.hearth_paused`
+
+A second global switch, created beside `switch.hearth_active` by the same config entry and under the same ownership
+rule (D3). Its state is saved with the other in the `hearth.global` store (`{"active": ..., "paused": ...}`; a store
+without `paused` loads as off), so a restart keeps it, and it defaults to off. Turning it on or off evaluates every
+room with reason `pause_switch`.
+
+While paused every room is dormant with reason `paused` (the dormant binary sensor's `reason`, its new
+`global_paused` attribute, the diagnostics' `dormant_reason` and `global_paused`). Dormancy already means no adaptive,
+skip, setback, schedule or preheat writes, heating runs tainted (and so discarded), and external changes ignored
+(ignored list reason `dormant`, no stand-down, no ledger); all of that is tested for `paused`.
+
+The whole difference from `switch.hearth_active` off is that **pause does not hand back**: ownership of Scheduler
+sources is decided by `enabled(SWITCH_SCHEDULE)` (schedule switch and `hearth_active`), which the pause does not touch,
+so the sources stay off. Precedence: `hearth_active` off wins, the room reads `disabled` and is handed back; with
+`hearth_active` on the pause wins over every VTherm-derived dormant reason (window, away...). Both switches carry a
+`description` attribute saying this plainly (entity translations have no description field, so strings.json only
+carries the names).
+
+## D46. Leaving the pause goes straight back to normal
+
+What happened on leaving dormancy before: nothing special. The schedule applies a block once (`applied_key`), a change
+made by somebody since the block started stands until the next block, and a stand-down lasts its time, so a room that
+left dormancy mid-block kept whatever had been set meanwhile and only the next boundary corrected it. That is right
+for a window closing and is unchanged for every dormant reason except `paused`.
+
+Leaving `paused` (the room's reason was `paused` and is now something else) sets a resume flag, and the first
+evaluation in which the room is not dormant (so unpausing with a window open waits for the window) runs
+`_handle_resume`: it ends any stand-down (unpausing is a fresh start, and a stand-down left over from before the
+pause would otherwise defeat the point) and forgets the applied block, so the same evaluation applies the CURRENT block's
+preset, for rooms whose schedule switch is on, even if a warm-up had set comfort. The adaptive comfort recompute runs in the
+same evaluation under its usual rules (it writes if the target differs from Hearth's last write), and skip, setback and
+preheat follow their existing rules; nothing new was invented for them.
+
+## D47. A person's change, an automation's change
+
+Each external change to the VTherm (the ones the override detector already treats as manual, D26) is classified by the
+new state's context: **human** if `context.user_id` is not None, otherwise **automation** (automations, scripts,
+Scheduler, integrations, VTherm itself after a restart). A same-preset target change is also human when the preset
+number was edited by a person in the last 10 s, because VTherm moves its own target afterwards without the person's context.
+
+- Human: exactly the behaviour of 0.6: stand-down (cause `manual_<kind>`) and a ledger entry when override learning is on.
+- Automation: Hearth still stands down (cause `automation_<kind>`, same rules: next block or the timeout, and the
+  stand-down still sits behind the override-learning switch as in D26), the heating run is tainted as before, but there is
+  no ledger entry. The change is added to the ignored list with reason `automation`. `last_external_change` gains
+  `origin` (`human` / `automation`) and the stand-down sensor exposes it as `last_origin`.
+- Tier 3 `learn_from_automations: false`. True classifies everything as human (the 0.6 behaviour, including the
+  `manual_` cause).
+- Hearth's own writes are recognised first, by the write log, before any classification, and are neither.
+
+## D48. A source switched back on is switched off again (supersedes the flag-only part of D34)
+
+When a source Scheduler entity turns on while the room is taken over and `hearth_active` is on (paused or not), Hearth
+calls `switch.turn_off` on it straight away and, once it is off, re-applies its own current block (unless paused or
+dormant, in which case the unpause or the end of the dormancy does it). A call that fails is retried on later evaluations
+(not within 5 s of the first attempt). The `scheduler_source_enabled` repair stays, for a source that is still on
+`scheduler_enabled_check_s` (120 s) after the take-over or after the last re-enable.
+
+The Scheduler fires its current slot the moment it is enabled, so the preset write races Hearth's reaction. A preset
+change within `source_reenable_grace_s` (Tier 3, default 15 s) of a source coming on is attributed to the Scheduler: no
+stand-down, no ledger entry, ignored with reason `scheduler_source`, `last_external_change` untouched. Both orders are
+handled. Write after the switch event: the re-enable time is remembered. Write before it (or with the switch state
+committed but its event not yet handled): the live source state is checked (on, and changed within the grace window); if
+neither saw it, the change is handled as usual and the source event then takes it back, restoring the stand-down, the ledger,
+`last_override` and `last_external_change` that the change altered, which are captured for that purpose before every
+external change. A real person's change within 15 s of a re-enable can be misread as the Scheduler's; that is the price
+of the window.
+
+## D49. Observe only: a per-room switch, and which rooms start in it
+
+`switch.hearth_<room>_observe` is a Tier 1 setting like the mechanism switches, stored in the room's `settings`
+under `observe`. Its default is OFF, so a store written before 0.7.0 (which always has its `settings` key, possibly
+empty) reads as live and an upgrade changes nothing: the Living Room and Office stay in control. A room created after
+this release starts observing, implemented as "a room whose store has no settings yet": `_async_load` finds no store
+(or one with no `settings` key), marks the room `new_room`, starts it with `{"observe": True}` and saves. No config-flow
+field was added: the rule needs nothing the user has to answer, and a field would only have a second default to keep
+in step. Consequences worth knowing: re-adding a removed room keeps its stored settings (it is not new), and a crash
+before the first save simply starts the room observing again, which is the safe direction. The entity name is
+`Observe`, so the id is `switch.hearth_<room>_observe`; `SWITCH_OBSERVE` is in `ROOM_SWITCHES`.
+
+## D50. What observe stops and what it keeps
+
+One choke point. `enabled(key)` (the "may act" test every writer already uses) is now false for every mechanism key
+while the room is observing; the new `wants(key)` is the switch as configured. Nothing is written to the stored
+switches, so switching observe off restores exactly what was set. Consequently, while observing: no adaptive write
+(the comfort target is still computed and shown), no skip, setback, schedule or preheat writes, no stand-down and no
+ledger entry (override handling is behind `enabled(learning)`; the change is still stored as `last_external_change`),
+no applied corrections (`learned_*` use `wants`, so the shown comfort target includes the correction that would apply),
+and the room never takes over Scheduler sources. `hearth.override` starts no stand-down on an observing room (it logs a
+diagnostic) because a stand-down would also taint learning runs. Observing a taken-over room hands the sources back by
+the existing path (`enabled(schedule)` goes false); switching observe off with the schedule switch on takes over by
+the existing path, shared-source guard included. The D48 re-assert only runs for taken-over rooms, so it does not run
+while observing. A room that is observing counts as not owning its schedule for the shared-source guard of its peers.
+Kept running: the warming-rate learner, the outdoor running mean, the Scheduler derivation, the forecast fetches, the
+skip preview, and the preheat plan and next-block sensor, which use `wants` so they show what Hearth would do.
+Turning observe on while a skip or setback is active ends it through the usual "mechanism switched off" restore; that is
+the one write, and it undoes Hearth's own earlier change. `observe_only` is an attribute of the next-block,
+comfort-target and dormant sensors.
+
+## D51. The learning gate, and the Scheduler's own preset change
+
+A run is clean only if the room was not dormant, had no stand-down and saw no external or target change after the run
+started (unchanged, D12). In observe mode the Scheduler's preset change is the source of the data, so the order
+matters: the external change is stamped when the VTherm state changes, the run starts at the first evaluation that sees
+heating on the affected preset (its start time and target are taken then), and the taint test is
+`last_external_change_at > run.started_at`, strictly. A change that begins the block is therefore earlier than the run
+it begins and does not taint it, and a change after the run started does. Tested in that order.
+
+## D52. Preset numbers are only needed to write
+
+The `no_preset_entities` dormant check no longer applies while observing, because the numbers matter only for writing,
+and dormancy would taint every run. With observe off and the numbers missing the room is dormant as before and, new, a
+Repair `no_preset_entities` (per entry, warning, not fixable, placeholders `room` and `vtherm`) explains that the VTherm
+must untick "use central configuration" for preset temperatures, that VTherm then creates the numbers at 7 C, and that
+they must be set before Hearth takes over. It clears when the numbers appear, when the room starts observing, and on
+unload or removal. The `ISSUE_NO_PRESET_ENTITIES` constant is in `const.py` and joins `ALL_ISSUES` for cleanup.
+
+## D53. Precedence
+
+`hearth_active` off (`disabled`) beats `paused`, which beats observe. Observe is not a dormant reason: an observing
+room is not dormant and keeps learning, and the VTherm-derived reasons (window, away, safety, off, unavailable, central
+frost) still apply to it and still taint runs. A paused observing room reads `paused`.

@@ -28,6 +28,9 @@ __all__ = [
 ]
 
 DOMAIN: Final = "hearth"
+
+# Repair raised when the VTherm has no per-room preset temperature numbers and the room is not observing (D52)
+ISSUE_NO_PRESET_ENTITIES: Final = "no_preset_entities"
 STORAGE_VERSION: Final = 1
 STORAGE_KEY_ROOM: Final = "hearth.room"
 STORAGE_KEY_FORECAST: Final = "hearth.forecast"
@@ -92,6 +95,7 @@ SWITCH_SCHEDULE: Final = "schedule"
 SWITCH_PREHEAT: Final = "preheat"
 SWITCH_LEARNING: Final = "learning"
 SWITCH_APPLY_LEARNING: Final = "apply_learning"
+SWITCH_OBSERVE: Final = "observe"  # D49: learn, but write nothing
 ROOM_SWITCHES: Final = (
     SWITCH_ADAPTIVE,
     SWITCH_SKIP,
@@ -100,6 +104,7 @@ ROOM_SWITCHES: Final = (
     SWITCH_PREHEAT,
     SWITCH_LEARNING,
     SWITCH_APPLY_LEARNING,
+    SWITCH_OBSERVE,
 )
 # Phase 1 on by default, everything later off so each phase can be enabled one at a time.
 SWITCH_DEFAULTS: Final = {
@@ -110,6 +115,7 @@ SWITCH_DEFAULTS: Final = {
     SWITCH_PREHEAT: False,
     SWITCH_LEARNING: False,
     SWITCH_APPLY_LEARNING: False,
+    SWITCH_OBSERVE: False,  # off for a room whose store has no such key; a brand-new room starts with it on (D49)
 }
 
 NUMBER_SLOPE: Final = "adaptive_slope"
@@ -168,6 +174,7 @@ DEFAULTS: Final[dict[str, object]] = {
     "learning_safety_factor_bound_pct": 25.0,
     "slope_error_cold_margin": 3.0,  # C below t_ref that counts as "cold" for slope attribution
     "write_log_len": 100,
+    "learn_from_automations": False,  # True: changes made by automations/scripts/Scheduler are learnt from like manual ones (D47)
     # 4.7 forecast subsystem
     "max_forecast_age_hours": 3,
     "forecast_refresh_interval_min": 60,
@@ -178,7 +185,8 @@ DEFAULTS: Final[dict[str, object]] = {
     "forecast_condition_window_end": "14:00",
     # 4.8 Scheduler entities as the schedule source
     "morning_cutoff": "12:00",  # local HH:MM: the first warm-by block before this is skippable
-    "scheduler_enabled_check_s": 120,  # seconds after a take-over before a still-on source raises a repair
+    "scheduler_enabled_check_s": 120,  # seconds after a take-over (or a re-enable) before a still-on source raises a repair
+    "source_reenable_grace_s": 15,  # seconds after a source turns on during which a preset change is the Scheduler's, not a person's (D48)
 }
 
 # Attribute paths on the VTherm climate entity (verified against VTherm 10.4).
@@ -210,6 +218,7 @@ DORMANT_OFF: Final = "off"
 DORMANT_UNAVAILABLE: Final = "unavailable"
 DORMANT_DISABLED: Final = "disabled"
 DORMANT_NO_PRESET_ENTITIES: Final = "no_preset_entities"
+DORMANT_PAUSED: Final = "paused"  # switch.hearth_paused: every room dormant, Scheduler sources stay off (D45)
 
 SKIP_IDLE: Final = "idle"
 SKIP_PREVIEW: Final = "preview"
@@ -225,5 +234,8 @@ SERVICE_SET_SCHEDULE: Final = "set_schedule"
 SERVICE_RESET_LEARNING: Final = "reset_learning"
 # reset_learning target that clears the warming-rate model rather than a ledger bucket (D38)
 RESET_WARMING_RATE: Final = "warming_rate"
+SERVICE_EXPORT_LEARNING: Final = "export_learning"
+SERVICE_IMPORT_LEARNING: Final = "import_learning"
+SERVICE_UNDO_RESET: Final = "undo_reset"
 SERVICE_REFRESH_FORECAST: Final = "refresh_forecast"
 SERVICE_RECOMPUTE: Final = "recompute"

@@ -62,6 +62,7 @@ def _comfort_attrs(room: HearthRoom) -> dict[str, Any]:
         "last_write": room.last_write,
         "vtherm_comfort_temp": room.vtherm.preset_temp("comfort"),
         "adaptive_enabled": room.enabled("adaptive"),
+        "observe_only": room.observing,
     }
 
 
@@ -195,6 +196,7 @@ def _warming_rate_attrs(room: HearthRoom) -> dict[str, Any]:
         "run_started_at": run.started_at.isoformat() if run else None,
         "run_tainted": run.taint_reason if run and run.tainted else None,
         "recent_runs": [list(r) for r in model.runs[-5:]],
+        **room.last_reset_attrs(),
     }
 
 
@@ -206,7 +208,7 @@ def _next_block_state(room: HearthRoom) -> str | None:
     local_start = dt_util.as_local(nxt.start)
     when = local_start.strftime("%H:%M") if local_start.date() == dt_util.now().date() else local_start.strftime("%a %H:%M")
     plan = room.preheat_plan
-    if nxt.block.warm_by and room.enabled("preheat") and plan is not None and plan.block.key == nxt.key and plan.lead_min > 0:
+    if nxt.block.warm_by and room.wants("preheat") and plan is not None and plan.block.key == nxt.key and plan.lead_min > 0:
         est = dt_util.as_local(plan.start).strftime("%H:%M")
         return f"{nxt.preset} by {when}, preheat est. {est}"
     if nxt.block.warm_by:
@@ -220,6 +222,7 @@ def _next_block_attrs(room: HearthRoom) -> dict[str, Any]:
     nxt = room.next_block(now)
     plan = room.preheat_plan
     return {
+        "observe_only": room.observing,
         "schedule_enabled": room.enabled("schedule"),
         "preheat_enabled": room.enabled("preheat"),
         "schedule_empty": room.schedule_model.is_empty,
@@ -285,6 +288,7 @@ def _standdown_attrs(room: HearthRoom) -> dict[str, Any]:
         "until": sd.until.isoformat() if active and sd.until else None,
         "last_cause": sd.cause,
         "last_external_change": room.last_external_change,
+        "last_origin": (room.last_external_change or {}).get("origin"),
         "learning_enabled": room.enabled("learning"),
         "timeout_min": room.const("standdown_timeout_min"),
         "recent_ignored_overrides": room.learning.get("ignored", [])[-5:],
