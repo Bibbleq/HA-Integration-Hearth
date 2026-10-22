@@ -373,3 +373,88 @@ measured about 7 C/h, and swapping in a room sensor left that run in the model w
 of deleting the room. An empty `bucket` keeps meaning "every ledger bucket" and does not touch the warming rate,
 so existing calls behave as before and a ledger reset never costs a winter of learned preheat. No automatic reset
 on a sensor change: Hearth does not see the VTherm's configuration, only its reported temperature.
+
+## D39. What "learning" is, and the export blob
+
+Learning is three parts, each a stable JSON shape taken straight from an existing `to_dict()`:
+
+- `warming_rate`: the `WarmingModel` (`a`, `b`, `runs` as `[delta, rate]` pairs, `max_runs`).
+- `ledger`: the override `Ledger` (every entry, every bucket's statistics, `max_entries`).
+- `running_mean`: the outdoor `RunningMeanState` (`t_rm`, `t_rm_day`, `seeded_at`, `frozen`, today's and the
+  completed day's accumulators, recent daily means).
+
+Everything else is transient and deliberately left out: the write log, stand-down, skip and setback state, the
+forecast cache, the heating run in progress, the preheat plan, the Scheduler-derived schedule, the settings
+switches and numbers. The blob is `{"format": "hearth.learning", "version": 1, "exported_at", "hearth_version",
+"room", "vtherm", "parts": {...}}`, and a part is present only if it has content (a warming model with no runs and
+no fit, an empty ledger and an unseeded running mean are left out). Because each part is the model's own
+`to_dict()`, the diagnostics download holds the same three shapes (`room.mechanisms.warming`, `room.ledger`,
+`room.running_mean`) and can be wrapped into a blob by hand. Parsing, validation, the content tests and the merge
+helpers are pure and live in `core/learning_io.py`; `mech_transfer.py` is the mixin that applies them to a room.
+
+## D40. `hearth.export_learning`
+
+Room selector as the other actions, plus `parts` (list; empty or missing means all three; an unknown name raises
+`ServiceValidationError`). Registered with `SupportsResponse.ONLY`. The response shape depends on the call, not on
+how many rooms happen to be installed, so scripts do not break when a second room is added: a call that names a
+room (`entry_id` or `vtherm_entity_id`) gets that room's bare blob; a call that names none gets
+`{"rooms": {"<vtherm entity id>": blob, ...}}`, even with one room. The integration writes nothing to disk. The
+blob is built from copies (`to_dict()`), so editing a response cannot reach live state.
+
+## D41. `hearth.import_learning`
+
+Needs exactly one room. `data` is the blob (an object); `parts` defaults to every part the blob holds, and asking
+for a part the blob lacks is an error. Validation happens in two passes and never half-applies: the blob's
+structure (format, version, part names) is always checked, and the shape of each *selected* part is checked in
+full (types, finite numbers, ISO times with an offset, bucket names, non-negative `b`, `t_rm` present with a
+`seeded_at`) into fresh model objects; only when every selected part parsed are any of them swapped in. A part
+that is not selected is not validated, so a good part can be taken from a blob whose other part is damaged.
+Any failure is a `ServiceValidationError` that names the field.
+
+Applying replaces the part wholesale. The warming model is clamped to the room's `max_learning_runs` (refitted
+only if runs had to be dropped); after it the heating run in progress and the preheat plan are dropped, as in D38.
+The running mean is replaced together with its tracker and does *not* start a new 48 h seed hold, because the
+imported state carries its own `seeded_at` (which is why a running mean without one is refused: `seed_hold_active`
+treats a missing `seeded_at` as "just seeded"). Importing into a room whose VTherm differs from the blob's
+`vtherm` is allowed, since that is the "room rebuilt" case, but logs a warning and names the source VTherm in the
+`import_learning` diagnostic event, which also names the parts. The store is saved immediately (not the 30 s
+coalesced save) and the room is re-evaluated with reason `import_learning`.
+
+## D42. Reversible reset: the `last_reset` stash
+
+Before `hearth.reset_learning` clears anything it stores, in the room store under `last_reset`,
+`{"at": ISO, "bucket": <bucket or null>, "blob": <export blob>}`. For `bucket: warming_rate` the blob holds the
+`warming_rate` part; for a ledger bucket, or an empty bucket (every ledger bucket), it holds the `ledger` part.
+Only the latest reset is kept. A reset that would clear nothing (an empty model or ledger, or an empty bucket) does
+not overwrite an earlier stash, so a stray second click on reset cannot destroy the way back. The reset itself now
+saves at once as well, so the stash is on disk before the next restart. `hearth.undo_reset` takes only a room,
+raises `ServiceValidationError` when nothing is stashed, applies the stash, clears `last_reset`, saves, and emits an
+`undo_reset` diagnostic.
+
+## D43. Undoing a single-bucket reset restores that bucket, and merges
+
+The stash for a ledger reset is the whole ledger as it was, so the blob stays a valid export that
+`import_learning` accepts. Undo does not import it wholesale, though: it restores only the reset bucket (or all
+four after an empty-bucket reset) and keeps everything else in the live ledger. Replacing the whole ledger would
+silently throw away overrides recorded in the other buckets between the reset and the undo, which is exactly when
+someone notices the reset was a mistake. The same reasoning applies to the warming rate: runs learnt since the
+reset are appended to the stashed runs and the model refitted. Entries recorded in a restored bucket since the
+reset are replayed onto the stashed statistics with the update the ledger uses when it records them, so the decay
+and weighting stay right. When nothing was learnt since the reset the result is exactly the pre-reset state,
+down to the fitted constants and the statistics. This diverges from the brief's "undo imports `last_reset.blob`"
+only where data would otherwise be lost.
+
+## D44. Persistence and visibility
+
+`last_reset` is a new top-level key in the room store. A key that is absent (any 0.6.x store) loads as "nothing to
+undo"; a stash that is damaged or does not parse as a blob is dropped with a warning. No store migration was
+needed, so `STORAGE_VERSION` stays at 1. `sensor.hearth_<room>_warming_rate` and the four
+`sensor.hearth_<room>_learning_<bucket>` sensors gain `last_reset_at` and `last_reset_bucket` (both None when
+nothing can be undone; the blob is never put in an attribute). The diagnostics download gains `room.last_reset`
+with the time, the bucket and the blob. The actions are `hearth.export_learning`, `hearth.import_learning` and
+`hearth.undo_reset`, with descriptions in `services.yaml`, `strings.json` and `translations/en.json`.
+
+Found while testing undo across a reload: unloading the last room removed the services and nothing put them
+back, because a config-entry reload runs `async_setup_entry` but not `async_setup`. After any options change on a
+single-room install every Hearth action disappeared until the next restart. `async_setup_entry` now calls the
+idempotent `async_setup_services`, with a regression test.

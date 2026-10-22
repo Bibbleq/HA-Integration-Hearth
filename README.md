@@ -110,8 +110,9 @@ Each room is a device named *Hearth \<Room\>*. Diagnostics (read-only):
 | `sensor.hearth_<room>_learning_<bucket>` | Phase 4: decayed mean bias in C per bucket (`preheat_shortfall`, `slope_error`, `skip_failure`, `baseline_error`) with evidence count and the correction that would apply |
 | `binary_sensor.hearth_<room>_dormant` | On when Hearth is leaving the room alone, with reason (away / central_frost / window / safety / overpowering / off / unavailable / disabled / no_preset_entities) |
 
-Hearth also fires `hearth_diagnostic` events (seeding, outdoor sensor loss, refused writes) and provides a
-config-entry diagnostics download.
+Hearth also fires `hearth_diagnostic` events (seeding, outdoor sensor loss, refused writes, learning imports and
+undos) and provides a config-entry diagnostics download. The warming-rate sensor and the four `learning_<bucket>`
+sensors carry `last_reset_at` and `last_reset_bucket` while a reset can still be undone.
 
 ## Services
 
@@ -121,9 +122,95 @@ config-entry diagnostics download.
 | `hearth.recompute` | room (optional), `force` | Force an adaptive recompute and write |
 | `hearth.refresh_forecast` | room (optional) | Fetch the forecast now |
 | `hearth.set_schedule` | room, `schedule` | Replace a room's warm-by schedule (phase 3). Refused for a room that takes its schedule from Scheduler entities |
-| `hearth.reset_learning` | room, `bucket` (optional) | Clear the ledger, or one bucket (phase 4). `bucket: warming_rate` instead clears the learned warming rate and any run in progress, back to the 1.0 C/h default; do this after changing the VTherm's temperature sensor. An empty bucket never touches the warming rate |
+| `hearth.reset_learning` | room, `bucket` (optional) | Clear the ledger, or one bucket (phase 4). `bucket: warming_rate` instead clears the learned warming rate and any run in progress, back to the 1.0 C/h default; do this after changing the VTherm's temperature sensor. An empty bucket never touches the warming rate. What is cleared is kept so `hearth.undo_reset` can bring it back |
+| `hearth.export_learning` | room (optional), `parts` (optional) | Return a room's learnt values as response data: `warming_rate`, `ledger`, `running_mean`. Name one room for its data directly, none for every room under `rooms`. Writes nothing to disk |
+| `hearth.import_learning` | room, `data`, `parts` (optional) | Replace a room's learnt values with data from `export_learning`. Everything is checked before anything is applied |
+| `hearth.undo_reset` | room | Put back what the last `reset_learning` cleared in that room |
 
 `room` is either `entry_id` (config entry selector) or `vtherm_entity_id` (the climate entity the room drives).
+
+## Backing up and moving learning
+
+What Hearth learns lives in one small file per room (`.storage/hearth.room.climate_living_room` for `climate.living_room`): the **warming rate**
+(how fast the room warms, from clean heating runs), the **override ledger** (your manual corrections) and the
+**running mean** of outdoor temperature. A normal Home Assistant backup already includes it, but restoring a
+backup is all or nothing: it rolls back everything else in Home Assistant too. Hearth adds a way to take the
+learnt values out, put them back, and undo a reset, per room.
+
+- **Diagnostics download** (the room's device page, *Download diagnostics*) contains the learnt values for
+  reading: `room.mechanisms.warming`, `room.ledger` and `room.running_mean`, plus `room.last_reset` while a reset
+  can be undone. It is a snapshot to look at or keep, not something to feed back in as it stands, though its
+  three parts have the same shape as the export (see the last example below).
+- **`hearth.export_learning`** returns the values as action response data. Nothing is written to disk. With a
+  room named (`entry_id` or `vtherm_entity_id`) the response is that room's data:
+
+  ```json
+  {"format": "hearth.learning", "version": 1, "exported_at": "2026-10-22T07:30:00+00:00", "hearth_version": "0.7.0",
+   "room": "Living Room", "vtherm": "climate.living_room",
+   "parts": {"warming_rate": {...}, "ledger": {...}, "running_mean": {...}}}
+  ```
+
+  With no room named you get every room: `{"rooms": {"climate.living_room": {...}, "climate.bedroom": {...}}}`.
+  `parts` (a list of `warming_rate`, `ledger`, `running_mean`) limits what is exported; the default is all
+  three. A part with nothing learnt yet is left out.
+- **`hearth.import_learning`** takes a room and `data` (the object above), and optionally `parts` (default: every
+  part the data holds). The whole object is checked first (format, version, every selected part) and nothing is
+  applied unless all of it is good. Each imported part then *replaces* the room's current one. Importing a
+  warming rate also drops a heating run in progress. An imported running mean keeps its own seeding time, so it
+  does not start another 48 h hold. Data exported from a different VTherm is allowed (that is how you restore a
+  rebuilt room) but logs a warning. The room is saved at once and recomputed.
+- **`hearth.reset_learning`** now keeps what it is about to clear, and **`hearth.undo_reset`** puts it back.
+  Only the latest reset is kept, and it is gone once undone. Undoing a single-bucket reset restores just that
+  bucket; anything learnt since the reset is kept alongside it. A reset that clears nothing leaves the previous
+  undo in place.
+
+Try it in *Developer Tools > Actions* (YAML mode shows the response):
+
+```yaml
+action: hearth.export_learning
+data:
+  vtherm_entity_id: climate.living_room
+```
+
+To restore, paste the response's object under `data:`; `parts` is optional:
+
+```yaml
+action: hearth.import_learning
+data:
+  vtherm_entity_id: climate.living_room
+  parts: [warming_rate]
+  data:
+    format: hearth.learning
+    version: 1
+    parts:
+      warming_rate:
+        a: 2.1
+        b: 0.05
+        runs: [[10.0, 1.6], [14.0, 1.4], [18.0, 1.2]]
+        max_runs: 30
+```
+
+The export is far too large for an `input_text` helper (255 characters), so do not try to keep it there. In
+a script, take it with `response_variable` and hand it to whatever should keep it:
+
+```yaml
+script:
+  hearth_backup_living_room:
+    sequence:
+      - action: hearth.export_learning
+        data:
+          vtherm_entity_id: climate.living_room
+        response_variable: learning
+      - action: persistent_notification.create
+        data:
+          title: Hearth learning, Living Room
+          message: "{{ learning | to_json }}"
+```
+
+A `notify` action, or any integration that writes a file, can take `{{ learning | to_json }}` in the same way
+if you want the backup somewhere that survives a restart. To use the diagnostics download instead, wrap its three
+parts: `data: {format: hearth.learning, version: 1, parts: {warming_rate: <room.mechanisms.warming>,
+ledger: <room.ledger>, running_mean: <room.running_mean>}}`.
 
 ## Enabling each phase
 

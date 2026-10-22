@@ -6,7 +6,7 @@ Python 3.14, hassfest, and HACS validation.
 
 | Check | State |
 |---|---|
-| pytest (289 tests at 0.6.0: 186 pure-core, 103 HA-level) | green on CI |
+| pytest (386 tests at 0.7.0: 246 pure-core, 140 HA-level) | green on CI |
 | hassfest | green |
 | HACS validation | strict since the repo went public (see D18) |
 
@@ -105,6 +105,26 @@ real Versatile Thermostat or a real weather integration:
   sensor for bank holidays (D30). Verify on the live system that `specific_states.last_central_mode`
   reads `Frost protection` when you set central frost, and that the workday sensor's `check_date`
   service answers for future dates.
+- **0.7.0**: learnt values can be exported, imported and restored per room, and a reset is reversible
+  (D39-D44). New actions `hearth.export_learning` (response data, `parts`), `hearth.import_learning` (`data`,
+  `parts`; validates everything before applying) and `hearth.undo_reset`; `hearth.reset_learning` now stashes what
+  it clears as `last_reset` in the room store (no store migration; 0.6.x stores load unchanged); `last_reset_at` and
+  `last_reset_bucket` on the warming-rate and `learning_<bucket>` sensors and `room.last_reset` in the diagnostics
+  download. Also fixes the Hearth actions disappearing after a reload of the only room. Tests: 386 (was 290).
+  Verify on the live system:
+  1. Developer Tools > Actions, YAML mode: `hearth.export_learning` with `vtherm_entity_id` returns the room's
+     blob (`format`, `version`, `parts`) and with no room returns `rooms`; the response is readable and complete
+     (a full ledger is tens of kilobytes, check the UI shows all of it).
+  2. `reset_learning` with `bucket: warming_rate` on a room with runs, then `undo_reset`: `sensor.hearth_<room>_warming_rate`
+     `evidence_count` and constants come back, and `last_reset_at` is set while stashed and empty afterwards.
+  3. Restart Home Assistant between a reset and its undo: `last_reset_at` survives and the undo still works.
+  4. Reload the integration (change an option on the only room) and check the actions are still listed.
+  5. Import an export into a room after deleting and re-adding it: the warning about a different VTherm appears
+     only when the VTherm entity differs, and the seed hold does not restart (`seed_hold_active` stays false).
+  6. A deliberately broken `data` (wrong `version`, a bad second part) is refused with a readable message and the
+     room is unchanged.
+  7. The `script` example in the README with `persistent_notification.create`: check how long a real export is in
+     a notification before relying on it as a backup.
 - **0.6.1**: `hearth.reset_learning` with `bucket: warming_rate` clears the learned warming rate (D38). Use it
   after pointing a VTherm at a different temperature sensor.
 - **0.6.0**: Scheduler entities as a room's schedule source, with automatic take-over and fallback
