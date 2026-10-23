@@ -161,6 +161,8 @@ DEFAULTS: Final[dict[str, object]] = {
     "max_learning_runs": 30,
     "learn_min_run_min": 20,  # minutes: shortest heating run the learner accepts
     "learn_min_rise": 0.3,  # C: smallest temperature rise the learner accepts
+    "learn_reach_tolerance": 0.1,  # C: a run ends (and counts) when the room is within this of target
+    "learn_max_run_min": 240,  # minutes: a warm-up still short of target after this is discarded
     "solar_gain_discount": 0.5,  # C: preheat target reduction on sunny mornings for solar rooms
     "preheat_lookahead_hours": 12,  # only plan preheat for warm-by blocks within this horizon
     # 4.6 override handling and learning

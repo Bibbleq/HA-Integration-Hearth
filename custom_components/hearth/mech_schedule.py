@@ -243,17 +243,26 @@ class ScheduleMixin:
     # ------------------------------------------------------------- learner
 
     def _learn(self, now: datetime) -> None:
+        """Track one warm-up: from the moment a comfort block starts heating until the room reaches target.
+
+        The valve's own heating/idle flag is NOT the end of a run (D54): Tado valves report idle while
+        still part-open once their radiator-side reading nears their setpoint, which chopped warm-ups
+        into sub-20-minute fragments that were all discarded. A run is counted when the room sensor
+        reaches the target; it is discarded if the block ends first, if it runs past
+        `learn_max_run_min`, or if it is tainted (dormant, stand-down, manual or target change).
+        """
         snap = self.snapshot
-        clean = (
-            snap.heating
-            and snap.preset in self.affected_presets
-            and not self.dormant
-            and not self.standdown_active
-            and snap.current_temp is not None
-        )
         run = self.heating_run
         if run is None:
-            if clean and snap.target_temp is not None:
+            if (
+                snap.heating
+                and snap.preset in self.affected_presets
+                and not self.dormant
+                and not self.standdown_active
+                and snap.current_temp is not None
+                and snap.target_temp is not None
+                and snap.current_temp < snap.target_temp - float(self.const("learn_reach_tolerance"))
+            ):
                 self.heating_run = HeatingRun(now, snap.target_temp, snap.current_temp, snap.current_temp, now)
                 self.heating_run.sample(now, snap.current_temp, self.outdoor_temperature())
             return
@@ -265,14 +274,26 @@ class ScheduleMixin:
             run.taint("manual_change")
         elif snap.target_temp is not None and abs(snap.target_temp - run.t_target) > 0.01:
             run.taint("target_change")
-        if snap.heating and snap.current_temp is not None and not run.tainted:
-            run.sample(now, snap.current_temp, self.outdoor_temperature())
+        elif snap.preset not in self.affected_presets:
+            run.taint("block_ended")
+        elif (now - run.started_at).total_seconds() / 60.0 > float(self.const("learn_max_run_min")):
+            run.taint("too_long")
+        if run.tainted:
+            self._diagnostic("discarded_run", f"Heating run discarded: {run.taint_reason}")
+            self.heating_run = None
+            return
+        if snap.current_temp is None:
+            return
+        run.sample(now, snap.current_temp, self.outdoor_temperature())
+        if snap.current_temp < run.t_target - float(self.const("learn_reach_tolerance")):
             return
         result = run.result(min_minutes=float(self.const("learn_min_run_min")), min_rise=float(self.const("learn_min_rise")))
         if result is not None:
             delta, rate = result
             self.warming_model.add_run(delta, rate)
             self._diagnostic("learned_run", f"Clean heating run: {rate:.2f} C/h at delta {delta:.1f} C ({self.warming_model.n_runs} runs)")
+        else:
+            self._diagnostic("discarded_run", "Heating run reached target too quickly to learn from")
         self.heating_run = None
 
     def current_warming_rate(self) -> tuple[float, bool]:

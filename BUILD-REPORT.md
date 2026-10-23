@@ -6,7 +6,7 @@ Python 3.14, hassfest, and HACS validation.
 
 | Check | State |
 |---|---|
-| pytest (435 tests at 0.7.0: 246 pure-core, 189 HA-level) | green on CI |
+| pytest (438 tests at 0.7.1: 246 pure-core, 192 HA-level) | green on CI |
 | hassfest | green |
 | HACS validation | strict since the repo went public (see D18) |
 
@@ -100,6 +100,14 @@ real Versatile Thermostat or a real weather integration:
 
 ## Changes after the first build
 
+- **0.7.1**: warming runs end when the room reaches target instead of when the valve reports idle (D54), so
+  single-valve Tado rooms learn. New constants `learn_reach_tolerance` (0.1 C) and `learn_max_run_min` (240);
+  new diagnostic kind `discarded_run` with the reason. No store change. Verify on the live system:
+  1. After a comfort block's warm-up, `hearth_diagnostic` shows `learned_run` once the room sensor reaches target,
+     even if the valve went idle first, and `evidence_count` on `sensor.hearth_<room>_warming_rate` goes up.
+  2. A room whose block ends before it gets to target (Office before it joined the boiler circuit) shows
+     `discarded_run` with `block_ended` and learns nothing.
+  3. A door opened after the room reached target does not discard the run.
 - **0.5.0**: a frost preset no longer makes a room dormant (only VTherm central frost protection does,
   D29), so schedules with frost blocks keep running; skips never start from frost; optional workday
   sensor for bank holidays (D30). Verify on the live system that `specific_states.last_central_mode`

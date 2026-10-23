@@ -582,3 +582,22 @@ unload or removal. The `ISSUE_NO_PRESET_ENTITIES` constant is in `const.py` and 
 `hearth_active` off (`disabled`) beats `paused`, which beats observe. Observe is not a dormant reason: an observing
 room is not dormant and keeps learning, and the VTherm-derived reasons (window, away, safety, off, unavailable, central
 frost) still apply to it and still taint runs. A paused observing room reads `paused`.
+
+## D54. A warm-up ends when the room reaches target, not when the valve goes idle
+
+Until 0.7.1 a heating run closed on the first sample where the VTherm was not `heating`. On the live system (Tado
+smart radiator thermostats under VTherm over_climate) the valve reports `idle` while it is still part-open, once its
+own radiator-side reading nears its setpoint: the Main Bedroom on 2026-10-23 went `idle` 19 min 17 s into a warm-up
+with the valve 41 % open and the room still rising 1 C every 8 minutes. Every warm-up in a single-valve room was
+chopped into fragments under `learn_min_run_min` and discarded; only the three-valve Kitchen learnt anything.
+
+A run now starts as before (comfort-type preset, heating, not dormant or stood down, room below target) and then
+ignores the heating flag. It is counted when the room sensor comes within `learn_reach_tolerance` (0.1 C) of the
+target, using the time from start to that sample. It is discarded, with a `discarded_run` diagnostic, when the block
+ends first (`block_ended`: a room that never got there, such as a zone that cannot fire the boiler), when it runs
+past `learn_max_run_min` (240), or on the existing taints (dormant, stand-down, manual change, target change). A
+door that opens after the room has reached target no longer costs the run, because the run is already closed.
+
+This measures what preheat needs: the time from switching to comfort until the room sensor reads target, including
+any minutes the valve spends idle. `learn_min_run_min` and `learn_min_rise` still apply, so a small deficit reached
+in a few minutes is not learnt from.

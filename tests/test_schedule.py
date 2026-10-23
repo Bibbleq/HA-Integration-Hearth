@@ -139,19 +139,19 @@ async def test_learner_records_clean_run_and_uses_it(hass: HomeAssistant, hass_s
     room = await setup_room(hass, make_entry(options=opts()))
     assert room.heating_run is None
     for i in range(5):
-        # Five clean runs: 1.5 C rise over 60 min -> 1.5 C/h, delta 15.5
+        # Five clean runs: 19.0 -> 20.5 (target reached) over 60 min -> 1.5 C/h, delta 15.5
         start = local(today, 6 + i * 2, 0)
         freezer.move_to(start)
-        set_vtherm(hass, preset="comfort", current=17.0, target=20.5, outdoor=5.0, hvac_action="heating")
+        set_vtherm(hass, preset="comfort", current=19.0, target=20.5, outdoor=5.0, hvac_action="heating")
         await hass.async_block_till_done()
         assert room.heating_run is not None
         await tick(hass, freezer, start + timedelta(minutes=30))
-        set_vtherm(hass, preset="comfort", current=17.75, target=20.5, outdoor=5.0, hvac_action="heating")
+        set_vtherm(hass, preset="comfort", current=19.75, target=20.5, outdoor=5.0, hvac_action="heating")
         await hass.async_block_till_done()
         freezer.move_to(start + timedelta(minutes=60))
-        set_vtherm(hass, preset="comfort", current=18.5, target=20.5, outdoor=5.0, hvac_action="heating")
+        set_vtherm(hass, preset="comfort", current=20.5, target=20.5, outdoor=5.0, hvac_action="heating")
         await hass.async_block_till_done()
-        set_vtherm(hass, preset="comfort", current=18.5, target=20.5, outdoor=5.0, hvac_action="idle")
+        set_vtherm(hass, preset="comfort", current=20.5, target=20.5, outdoor=5.0, hvac_action="idle")
         await hass.async_block_till_done()
         assert room.heating_run is None
         assert room.warming_model.n_runs == i + 1
@@ -195,6 +195,77 @@ async def test_learner_discards_tainted_and_short_runs(hass: HomeAssistant, hass
     set_vtherm(hass, preset="eco", current=15.0, target=15.0, outdoor=5.0, hvac_action="heating")
     await hass.async_block_till_done()
     assert room.heating_run is None
+
+
+async def test_learner_rides_through_valve_idle_and_counts_when_target_reached(
+    hass: HomeAssistant, hass_storage, services, freezer
+) -> None:
+    """D54: Tado reports idle mid-warm-up; the run continues and counts once the room reaches target."""
+    today = dt_util.start_of_local_day()
+    await tick(hass, freezer, local(today, 6, 0))
+    seed_store(hass_storage, t_rm=10.0, settings={"adaptive": False})
+    set_numbers(hass)
+    set_vtherm(hass, preset="eco", current=18.5, target=15.0, outdoor=5.0, hvac_action="idle")
+    room = await setup_room(hass, make_entry(options=opts()))
+    start = local(today, 6, 30)
+    freezer.move_to(start)
+    set_vtherm(hass, preset="comfort", current=18.5, target=20.5, outdoor=5.0, hvac_action="heating")
+    await hass.async_block_till_done()
+    assert room.heating_run is not None
+    # 19 min in, the valve reports idle although the room is still below target
+    freezer.move_to(start + timedelta(minutes=19))
+    set_vtherm(hass, preset="comfort", current=19.5, target=20.5, outdoor=5.0, hvac_action="idle")
+    await hass.async_block_till_done()
+    assert room.heating_run is not None and not room.heating_run.tainted
+    # 30 min in, the room reaches target with the valve still idle -> counted: 2.0 C over 30 min
+    freezer.move_to(start + timedelta(minutes=30))
+    set_vtherm(hass, preset="comfort", current=20.5, target=20.5, outdoor=5.0, hvac_action="idle")
+    await hass.async_block_till_done()
+    assert room.heating_run is None
+    assert room.warming_model.n_runs == 1
+    assert room.warming_model.runs[0][1] == pytest.approx(4.0)
+
+
+async def test_door_opening_after_target_reached_does_not_lose_the_run(hass: HomeAssistant, hass_storage, services, freezer) -> None:
+    today = dt_util.start_of_local_day()
+    await tick(hass, freezer, local(today, 6, 0))
+    seed_store(hass_storage, t_rm=10.0, settings={"adaptive": False})
+    set_numbers(hass)
+    set_vtherm(hass, preset="comfort", current=18.0, target=20.5, outdoor=5.0, hvac_action="heating")
+    room = await setup_room(hass, make_entry(options=opts()))
+    assert room.heating_run is not None
+    freezer.move_to(local(today, 7, 0))
+    set_vtherm(hass, preset="comfort", current=20.6, target=20.5, outdoor=5.0, hvac_action="heating")
+    await hass.async_block_till_done()
+    assert room.heating_run is None and room.warming_model.n_runs == 1
+    freezer.move_to(local(today, 7, 10))
+    set_vtherm(hass, preset="comfort", current=20.4, target=20.5, outdoor=5.0, hvac_action="idle", window="on")
+    await hass.async_block_till_done()
+    assert room.warming_model.n_runs == 1
+
+
+async def test_run_discarded_when_block_ends_or_runs_too_long(hass: HomeAssistant, hass_storage, services, freezer) -> None:
+    today = dt_util.start_of_local_day()
+    await tick(hass, freezer, local(today, 6, 0))
+    seed_store(hass_storage, t_rm=10.0, settings={"adaptive": False})
+    set_numbers(hass)
+    set_vtherm(hass, preset="comfort", current=17.0, target=20.5, outdoor=5.0, hvac_action="heating")
+    room = await setup_room(hass, make_entry(options=opts()))
+    assert room.heating_run is not None
+    # Block ends (eco) before the room reaches target -> discarded (no boiler, stalled room)
+    freezer.move_to(local(today, 7, 30))
+    set_vtherm(hass, preset="eco", current=18.0, target=15.0, outdoor=5.0, hvac_action="idle")
+    await hass.async_block_till_done()
+    assert room.heating_run is None and room.warming_model.n_runs == 0
+    # A run still short of target after learn_max_run_min (240) -> discarded
+    freezer.move_to(local(today, 8, 0))
+    set_vtherm(hass, preset="comfort", current=17.0, target=20.5, outdoor=5.0, hvac_action="heating")
+    await hass.async_block_till_done()
+    assert room.heating_run is not None
+    freezer.move_to(local(today, 12, 1))
+    set_vtherm(hass, preset="comfort", current=20.5, target=20.5, outdoor=5.0, hvac_action="idle")
+    await hass.async_block_till_done()
+    assert room.heating_run is None and room.warming_model.n_runs == 0
 
 
 async def test_skip_defers_skippable_block_and_ends_on_non_skippable(hass: HomeAssistant, hass_storage, services, freezer) -> None:

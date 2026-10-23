@@ -221,25 +221,25 @@ async def test_observe_keeps_learning_a_run_started_by_a_scheduler_preset_change
         start = local(today, 6 + i * 2, 0)
         freezer.move_to(start)
         # 1. the Scheduler's slot switches the room to comfort (no user on the context)
-        _set_vtherm(hass, preset="comfort", current=17.0, target=20.5, outdoor=5.0, hvac_action="idle")
+        _set_vtherm(hass, preset="comfort", current=19.0, target=20.5, outdoor=5.0, hvac_action="idle")
         await hass.async_block_till_done()
         assert room.last_external_change_at is not None
         # 2. the VTherm starts heating a moment later, which is when the run starts
         freezer.move_to(start + timedelta(seconds=20))
-        _set_vtherm(hass, preset="comfort", current=17.0, target=20.5, outdoor=5.0, hvac_action="heating")
+        _set_vtherm(hass, preset="comfort", current=19.0, target=20.5, outdoor=5.0, hvac_action="heating")
         await hass.async_block_till_done()
         assert room.heating_run is not None and not room.heating_run.tainted
         freezer.move_to(start + timedelta(minutes=30))
-        _set_vtherm(hass, preset="comfort", current=17.75, target=20.5, outdoor=5.0, hvac_action="heating")
+        _set_vtherm(hass, preset="comfort", current=19.75, target=20.5, outdoor=5.0, hvac_action="heating")
         await hass.async_block_till_done()
         freezer.move_to(start + timedelta(minutes=60))
-        _set_vtherm(hass, preset="comfort", current=18.5, target=20.5, outdoor=5.0, hvac_action="heating")
+        _set_vtherm(hass, preset="comfort", current=20.5, target=20.5, outdoor=5.0, hvac_action="heating")
         await hass.async_block_till_done()
-        _set_vtherm(hass, preset="comfort", current=18.5, target=20.5, outdoor=5.0, hvac_action="idle")
+        _set_vtherm(hass, preset="comfort", current=20.5, target=20.5, outdoor=5.0, hvac_action="idle")
         await hass.async_block_till_done()
         assert room.heating_run is None
         assert room.warming_model.n_runs == i + 1
-        _set_vtherm(hass, preset="eco", current=18.5, target=15.0, outdoor=5.0, hvac_action="idle")
+        _set_vtherm(hass, preset="eco", current=20.5, target=15.0, outdoor=5.0, hvac_action="idle")
         await hass.async_block_till_done()
     assert services["set_preset"] == [] and services["set_value"] == []
     assert hass.states.get("sensor.hearth_living_room_warming_rate").attributes["evidence_count"] == 2
