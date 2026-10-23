@@ -205,6 +205,9 @@
       "standdown": {
         "name": "Stand-down"
       },
+      "schedule_hint": {
+        "name": "Schedule hint"
+      },
       "learning_preheat_shortfall": {
         "name": "Learning preheat shortfall"
       },

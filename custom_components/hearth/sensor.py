@@ -309,6 +309,15 @@ def _learning_sensor(bucket: str) -> HearthSensorDescription:
     )
 
 
+def _schedule_hint_attrs(room: HearthRoom) -> dict[str, Any]:
+    return {
+        "suggestions": room.boost_suggestions(dt_util.utcnow()),
+        "recent_boosts": room.learning.get("boost_events", [])[-10:],
+        "window_days": room.const("boost_pattern_window_days"),
+        "min_events": room.const("boost_pattern_min_events"),
+    }
+
+
 PHASE4_SENSORS: tuple[HearthSensorDescription, ...] = (
     HearthSensorDescription(
         key="standdown",
@@ -316,6 +325,13 @@ PHASE4_SENSORS: tuple[HearthSensorDescription, ...] = (
         icon="mdi:hand-back-left",
         value_fn=_standdown_state,
         attrs_fn=_standdown_attrs,
+    ),
+    HearthSensorDescription(
+        key="schedule_hint",
+        translation_key="schedule_hint",
+        icon="mdi:calendar-alert",
+        value_fn=lambda r: len(r.boost_suggestions(dt_util.utcnow())),
+        attrs_fn=_schedule_hint_attrs,
     ),
     _learning_sensor("preheat_shortfall"),
     _learning_sensor("slope_error"),

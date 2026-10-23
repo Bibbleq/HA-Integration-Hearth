@@ -648,3 +648,24 @@ VTherm's window bypass (`versatile_thermostat.set_window_bypass`) heats through 
 `window_state` alone and went dormant anyway. The snapshot now treats a window as open only when it is open and not
 bypassed, so a future automation can bypass the conservatory door while the conservatory is warm.
 
+## D60. A boost is a signal, read by when it happened
+
+A boost is VTherm's timed preset (`versatile_thermostat.set_timed_preset`, `timed_preset_manager` in its attributes).
+Until 0.7.3 Hearth saw it as a plain preset change: from comfort it stood the room down to the next boundary or for
+180 minutes (longer than the boost) and learnt the boost preset's size as the person's correction, then stood down
+again when VTherm restored the original preset; from eco it was ignored entirely.
+
+Now a boost stands Hearth down until its own end time, never beyond, and the VTherm restoring the original preset is
+the boost ending, not an override. What a person's boost teaches depends on when it happened:
+
+- comfort, room at target: comfort is too cold (baseline, or slope on a cold running mean, by the usual attribution);
+- comfort, room more than 0.3 C below target: the warm-up was late (`preheat_shortfall`), not comfort;
+- during or just after a forecast skip: the skip was wrong (`skip_failure`, weight 2 as for any skip override);
+- eco or frost: somebody was using a room the schedule had empty. Recorded by day type (workday / non-workday) and local
+  hour; three in the same slot within 28 days is a schedule hint on `sensor.hearth_<room>_schedule_hint`.
+
+The ledger magnitude of a boost is a fixed 0.5 C in the warming direction: the boost preset's temperature says nothing
+about how much warmer the person wanted it. Decay and the three-event minimum before any correction keep one-offs
+(coming in from the cold, illness, a guest) from moving anything. Hearth never edits a schedule; the Scheduler card
+stays the place to change it. Boost events are not part of the learning export (they are short-lived evidence).
+

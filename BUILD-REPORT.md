@@ -6,7 +6,7 @@ Python 3.14, hassfest, and HACS validation.
 
 | Check | State |
 |---|---|
-| pytest (452 tests at 0.7.3: 246 pure-core, 206 HA-level) | green on CI |
+| pytest (462 tests at 0.7.3: 250 pure-core, 212 HA-level) | green on CI |
 | hassfest | green |
 | HACS validation | strict since the repo went public (see D18) |
 
@@ -110,6 +110,20 @@ real Versatile Thermostat or a real weather integration:
   2. Closing a window, or reloading a VTherm's options, leaves `sensor.hearth_<room>_stand_down` at `none` and adds a
      `vtherm_reapply` entry to `recent_ignored_overrides`.
   3. `versatile_thermostat.set_window_bypass` on with the window open: `binary_sensor.hearth_<room>_dormant` goes off.
+
+  Also in 0.7.3, boosts (D60): a VTherm timed preset (`versatile_thermostat.set_timed_preset`) stands Hearth down until
+  the boost's own end time (cause `timed_preset`), the VTherm restoring the original preset afterwards is ignored
+  (`boost_ended`) and hands the room straight back, and a person's boost is learnt by when it happened: in comfort at
+  target it is a +0.5 C baseline/slope entry, still below target a `preheat_shortfall` entry, during or just after a skip
+  a `skip_failure` entry, and in eco or frost it is recorded by day type and hour. Three boosts in the same hour on the
+  same kind of day within 28 days raise `sensor.hearth_<room>_schedule_hint` (new) and a `schedule_hint` diagnostic;
+  Hearth never edits the schedule. Verify:
+  4. `versatile_thermostat.set_timed_preset` with `preset: boost`, `duration_minutes: 30` from the dashboard on a live
+     room in comfort: the stand-down sensor shows cause `timed_preset` until the boost's end, `last_override` shows
+     `kind: boost`; after 30 minutes the stand-down clears with a `boost_ended` ignored entry and no second stand-down.
+  5. Check the person's `user_id` reaches the VTherm state written by the timed preset (otherwise boosts read as
+     automation and are not learnt; look at `last_origin`).
+  6. Boost the same room in an eco block at the same hour on three workdays: `schedule_hint` reads 1 with the slot.
 - **0.7.2**: a restart no longer stands rooms down (D55), and unchanged entities are not rewritten (D56).
   A VTherm change out of an unavailable or initialising state (`is_ready` false), or any change without a person's
   context while Home Assistant is starting and for `startup_grace_s` (180) after it has started, is a restore: it is

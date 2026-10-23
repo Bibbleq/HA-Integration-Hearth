@@ -307,7 +307,12 @@ Phases are meant to soak for a few weeks each. Everything is per room.
    conservative 1.0 C/h until it has five clean heating runs. A run lasts from the start of the comfort block's
    heating until the room sensor reaches target, whatever the valve reports in between; a block that ends first
    discards it.
-4. **Override learning**: turn on `switch.hearth_<room>_override_learning`. From then on a manual preset
+4. **Boosting a room**: use VTherm's timed preset (`versatile_thermostat.set_timed_preset`, `preset: boost`,
+   `duration_minutes`). Hearth stands down for exactly that long, hands the room back when VTherm restores the previous
+   preset, and learns from it by when it happened (D60): a boost in comfort says comfort or the warm-up was short, a
+   boost while the schedule had the room on eco or frost is collected on `sensor.hearth_<room>_schedule_hint`, which
+   suggests a comfort block once the same hour on the same kind of day has been boosted three times in four weeks.
+5. **Override learning**: turn on `switch.hearth_<room>_override_learning`. From then on a manual preset
    or temperature change stands Hearth down for that room (until the next schedule block or 180 min) and is
    recorded in the ledger. The `learning_*` sensors show the biases and the correction each bucket would
    apply. `apply_learned_corrections` is a second-winter flag: bounded corrections (+/- 1 C on targets,
