@@ -623,3 +623,28 @@ attributes, records the fingerprint on every write (including switch and number 
 write) and skips a room update that would write the same thing. `skip_preview.computed_at` changed on every
 evaluation, so it now moves only when the preview's content changes.
 
+## D57. An open window does not stop the schedule
+
+Until 0.7.3 every dormant reason held the schedule, so a block boundary that fell while a window was open was never
+applied: on 2026-10-23 the conservatory door opened at 08:04, the 08:15 eco block was skipped, and the Living Room sat
+on the 07:00 comfort preset all day underneath window frost. VTherm keeps the requested preset under its window
+action and returns to it when the window closes, so Hearth now applies schedule blocks (and preheat) while the only
+dormant reason is `window`. Every other dormant reason (paused, disabled, away, safety, off, unavailable, central frost,
+missing preset numbers) still holds the schedule, and a window still taints heating runs and stops adaptive, skip and
+setback writes.
+
+## D58. A VTherm putting its own preset temperature back is not an override
+
+When a window closes, when a VTherm's options are reloaded, and sometimes after Hearth's own preset write, the VTherm
+moves its target to the current preset's temperature with no user on the context. 0.7.2 read that as an automation
+setpoint change and stood the room down to the next block boundary (the Living Room twice on 2026-10-23). A target
+change on the same, non-`none` preset to exactly that preset's number value is now ignored as `vtherm_reapply`,
+unless the preset number itself changed within `write_match_window_s`: a number edit (Hearth's own, or a person's,
+D47) keeps its existing handling. A manual setpoint switches VTherm to preset `none`, so it is never caught here.
+
+## D59. A bypassed window is not dormant
+
+VTherm's window bypass (`versatile_thermostat.set_window_bypass`) heats through an open window. Hearth read
+`window_state` alone and went dormant anyway. The snapshot now treats a window as open only when it is open and not
+bypassed, so a future automation can bypass the conservatory door while the conservatory is warm.
+

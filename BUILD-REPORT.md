@@ -6,7 +6,7 @@ Python 3.14, hassfest, and HACS validation.
 
 | Check | State |
 |---|---|
-| pytest (446 tests at 0.7.2: 246 pure-core, 200 HA-level) | green on CI |
+| pytest (452 tests at 0.7.3: 246 pure-core, 206 HA-level) | green on CI |
 | hassfest | green |
 | HACS validation | strict since the repo went public (see D18) |
 
@@ -100,6 +100,16 @@ real Versatile Thermostat or a real weather integration:
 
 ## Changes after the first build
 
+- **0.7.3**: three gaps found on the Living Room on 2026-10-23. Schedule blocks are applied while the room is dormant
+  for an open window (D57); a VTherm moving its target back to its preset's own temperature is not an override (D58);
+  a bypassed window (`window_manager.is_window_bypass`) is not dormant (D59). New ignored-override reason
+  `vtherm_reapply`. Verify on the live system:
+  1. With a window/door open over a block boundary, `sensor.hearth_<room>_next_block` `applied_block` moves to the new
+     block and the VTherm's `preset_mode` changes while its target stays on the window temperature; when the window
+     closes the room is on the new block's preset.
+  2. Closing a window, or reloading a VTherm's options, leaves `sensor.hearth_<room>_stand_down` at `none` and adds a
+     `vtherm_reapply` entry to `recent_ignored_overrides`.
+  3. `versatile_thermostat.set_window_bypass` on with the window open: `binary_sensor.hearth_<room>_dormant` goes off.
 - **0.7.2**: a restart no longer stands rooms down (D55), and unchanged entities are not rewritten (D56).
   A VTherm change out of an unavailable or initialising state (`is_ready` false), or any change without a person's
   context while Home Assistant is starting and for `startup_grace_s` (180) after it has started, is a restore: it is

@@ -129,6 +129,11 @@ class LearningMixin:
             return
         if old_target is not None and new_target is not None and abs(new_target - old_target) > 0.01:
             # Same preset, target moved: a preset-temp number edit (ours, or someone's) or a manual setpoint.
+            if self._is_vtherm_reapply(new_preset, new_target, now, window):
+                # D58: the VTherm putting its own preset temperature back (window closed, options reload, our preset
+                # write landing) is not a person's or an automation's change.
+                self._ignore_override(now, "temp", "vtherm_reapply")
+                return
             number_entity = None
             for preset in (new_preset,) if new_preset else ():
                 number_entity = self.vtherm.preset_number_entity(preset)
@@ -139,6 +144,21 @@ class LearningMixin:
             self._record_external_change(
                 now, "temp", new_preset, new_preset, magnitude, change, self._change_origin(new, number_entity), startup=startup
             )
+
+    def _is_vtherm_reapply(self, preset: str | None, target: float, now: datetime, window: timedelta) -> bool:
+        """True when the new target is exactly the preset's own number and nobody touched that number recently.
+
+        A manual setpoint switches a VTherm to preset none, and a preset-number edit (ours or a person's) moves the
+        number within the match window, so neither is caught here.
+        """
+        if not preset or preset == PRESET_NONE:
+            return False
+        value = self.vtherm.preset_temp(preset)
+        if value is None or abs(target - value) > 0.05:
+            return False
+        number_entity = self.vtherm.preset_number_entity(preset)
+        state = self.hass.states.get(number_entity) if number_entity else None
+        return state is None or now - state.last_changed > window
 
     def _is_startup_change(self, old, now: datetime) -> bool:
         """D55: a change out of a VTherm that was unavailable or still initialising is its restore, not an override;
