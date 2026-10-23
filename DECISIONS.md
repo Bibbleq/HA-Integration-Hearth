@@ -623,3 +623,67 @@ attributes, records the fingerprint on every write (including switch and number 
 write) and skips a room update that would write the same thing. `skip_preview.computed_at` changed on every
 evaluation, so it now moves only when the preview's content changes.
 
+## D57. An open window does not stop the schedule
+
+Until 0.7.3 every dormant reason held the schedule, so a block boundary that fell while a window was open was never
+applied: on 2026-10-23 the conservatory door opened at 08:04, the 08:15 eco block was skipped, and the Living Room sat
+on the 07:00 comfort preset all day underneath window frost. VTherm keeps the requested preset under its window
+action and returns to it when the window closes, so Hearth now applies schedule blocks (and preheat) while the only
+dormant reason is `window`. Every other dormant reason (paused, disabled, away, safety, off, unavailable, central frost,
+missing preset numbers) still holds the schedule, and a window still taints heating runs and stops adaptive, skip and
+setback writes.
+
+## D58. A VTherm putting its own preset temperature back is not an override
+
+When a window closes, when a VTherm's options are reloaded, and sometimes after Hearth's own preset write, the VTherm
+moves its target to the current preset's temperature with no user on the context. 0.7.2 read that as an automation
+setpoint change and stood the room down to the next block boundary (the Living Room twice on 2026-10-23). A target
+change on the same, non-`none` preset to exactly that preset's number value is now ignored as `vtherm_reapply`,
+unless the preset number itself changed within `write_match_window_s`: a number edit (Hearth's own, or a person's,
+D47) keeps its existing handling. A manual setpoint switches VTherm to preset `none`, so it is never caught here.
+
+## D59. A bypassed window is not dormant
+
+VTherm's window bypass (`versatile_thermostat.set_window_bypass`) heats through an open window. Hearth read
+`window_state` alone and went dormant anyway. The snapshot now treats a window as open only when it is open and not
+bypassed, so a future automation can bypass the conservatory door while the conservatory is warm.
+
+## D60. A boost is a signal, read by when it happened
+
+A boost is VTherm's timed preset (`versatile_thermostat.set_timed_preset`, `timed_preset_manager` in its attributes).
+Until 0.7.3 Hearth saw it as a plain preset change: from comfort it stood the room down to the next boundary or for
+180 minutes (longer than the boost) and learnt the boost preset's size as the person's correction, then stood down
+again when VTherm restored the original preset; from eco it was ignored entirely.
+
+Now a boost stands Hearth down until its own end time, never beyond, and the VTherm restoring the original preset is
+the boost ending, not an override. What a person's boost teaches depends on when it happened:
+
+- comfort, room at target: comfort is too cold (baseline, or slope on a cold running mean, by the usual attribution);
+- comfort, room more than 0.3 C below target: the warm-up was late (`preheat_shortfall`), not comfort;
+- during or just after a forecast skip: the skip was wrong (`skip_failure`, weight 2 as for any skip override);
+- eco or frost: somebody was using a room the schedule had empty. Recorded by day type (workday / non-workday) and local
+  hour; three in the same slot within 28 days is a schedule hint on `sensor.hearth_<room>_schedule_hint`.
+
+The ledger magnitude of a boost is a fixed 0.5 C in the warming direction: the boost preset's temperature says nothing
+about how much warmer the person wanted it. Decay and the three-event minimum before any correction keep one-offs
+(coming in from the cold, illness, a guest) from moving anything. Hearth never edits a schedule; the Scheduler card
+stays the place to change it. Boost events are not part of the learning export (they are short-lived evidence).
+
+## D61. hearth.boost: a timed boost at a chosen temperature, on a person's behalf
+
+Knob turns at a Tado valve reach Home Assistant through the setpoint keeper, an automation, so a timed preset it
+starts carries no user and D60 would not learn from it; and a knob turn chooses a temperature, which a timed preset
+(fixed boost temperature) cannot carry. `hearth.boost` runs the VTherm timed preset itself: with a `temperature` it
+first writes the room's boost preset number (the one preset Hearth never otherwise touches unless it is an affected
+preset) and restores it when the boost ends, or on the first VTherm update after the boost's end if HA restarted. A
+`source` of person, dashboard, valve or voice makes the boost a person's for learning; without a source, a call with a
+user is a person's and one without is an automation's.
+
+With a chosen temperature the ledger magnitude is the person's own: temperature minus the original preset's
+temperature, either direction, capped like any override. A turn-down in eco or frost says nothing and is ignored; a
+turn-up there joins the schedule pattern (D60). The keeper converts the knob value into room terms first (knob minus
+the valve-reading-minus-room-reading gap) so the boost runs on the room sensor, not the radiator.
+
+Dashboard boosts can keep calling `versatile_thermostat.set_timed_preset` directly: D60 recognises them, and the
+person's user on the call is enough.
+

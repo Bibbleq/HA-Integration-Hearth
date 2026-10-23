@@ -188,6 +188,14 @@ DEFAULTS: Final[dict[str, object]] = {
     # 4.8 Scheduler entities as the schedule source
     "morning_cutoff": "12:00",  # local HH:MM: the first warm-by block before this is skippable
     "scheduler_enabled_check_s": 120,  # seconds after a take-over (or a re-enable) before a still-on source raises a repair
+    "boost_signal_c": 0.5,  # C: ledger magnitude of one timed boost (direction only, D60)
+    "boost_below_target_margin": 0.3,  # C: a boost this far below the comfort target is a late warm-up, not a cold comfort
+    "boost_default_min": 60,
+    "boost_min_c": 10.0,  # hearth.boost temperature clamp (D61)
+    "boost_max_c": 25.0,
+    "boost_pending_s": 120,  # how long a hearth.boost request waits for the VTherm timed preset to show up  # stand-down length when a timed preset reports no end time
+    "boost_pattern_window_days": 28,
+    "boost_pattern_min_events": 3,  # boosts in the same hour on the same kind of day before a schedule hint
     "startup_grace_s": 180,  # seconds after HA finishes starting during which a VTherm change is a restore, not an override (D55)
     "source_reenable_grace_s": 15,  # seconds after a source turns on during which a preset change is the Scheduler's, not a person's (D48)
 }
@@ -202,6 +210,7 @@ VT_ATTR_EXT_TEMP: Final = "ext_current_temperature"
 VT_ATTR_SLOPE: Final = "temperature_slope"
 VT_WINDOW_MANAGER: Final = "window_manager"
 VT_ATTR_WINDOW_STATE: Final = "window_state"
+VT_ATTR_WINDOW_BYPASS: Final = "is_window_bypass"
 VT_SAFETY_MANAGER: Final = "safety_manager"
 VT_ATTR_SAFETY_STATE: Final = "safety_state"
 VT_POWER_MANAGER: Final = "power_manager"
@@ -242,3 +251,4 @@ SERVICE_IMPORT_LEARNING: Final = "import_learning"
 SERVICE_UNDO_RESET: Final = "undo_reset"
 SERVICE_REFRESH_FORECAST: Final = "refresh_forecast"
 SERVICE_RECOMPUTE: Final = "recompute"
+SERVICE_BOOST: Final = "boost"

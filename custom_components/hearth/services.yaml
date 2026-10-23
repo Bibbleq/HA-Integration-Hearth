@@ -118,3 +118,36 @@ undo_reset:
       selector:
         entity:
           domain: climate
+boost:
+  fields:
+    entry_id:
+      selector:
+        config_entry:
+          integration: hearth
+    vtherm_entity_id:
+      selector:
+        entity:
+          domain: climate
+    minutes:
+      default: 60
+      selector:
+        number:
+          min: 1
+          max: 1440
+          unit_of_measurement: min
+    temperature:
+      selector:
+        number:
+          min: 10
+          max: 25
+          step: 0.5
+          unit_of_measurement: "°C"
+    source:
+      selector:
+        select:
+          options:
+            - person
+            - dashboard
+            - valve
+            - voice
+            - automation

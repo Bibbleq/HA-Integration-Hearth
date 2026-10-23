@@ -48,6 +48,7 @@ from .const import (
     VT_ATTR_SAFETY_STATE,
     VT_ATTR_SLOPE,
     VT_ATTR_TARGET_TEMP,
+    VT_ATTR_WINDOW_BYPASS,
     VT_ATTR_WINDOW_STATE,
     VT_CENTRAL_MODE_FROST,
     VT_POWER_MANAGER,
@@ -134,6 +135,7 @@ def snapshot_from_state(state: State | None) -> VThermSnapshot:
     a = state.attributes
     preset = a.get(VT_ATTR_PRESET)
     window_state = _nested(a, VT_WINDOW_MANAGER, VT_ATTR_WINDOW_STATE)
+    window_bypass = _nested(a, VT_WINDOW_MANAGER, VT_ATTR_WINDOW_BYPASS) is True  # D59: VTherm heats through a bypassed window
     safety_state = _nested(a, VT_SAFETY_MANAGER, VT_ATTR_SAFETY_STATE)
     overpowering_state = _nested(a, VT_POWER_MANAGER, VT_ATTR_OVERPOWERING_STATE)
     presence_state = _nested(a, VT_PRESENCE_MANAGER, VT_ATTR_PRESENCE_STATE)
@@ -146,7 +148,7 @@ def snapshot_from_state(state: State | None) -> VThermSnapshot:
         target_temp=_float(a.get(VT_ATTR_TARGET_TEMP)),
         outdoor_temp=_float(_nested(a, VT_SPECIFIC_STATES, VT_ATTR_EXT_TEMP)),
         slope=_float(_nested(a, VT_SPECIFIC_STATES, VT_ATTR_SLOPE)),
-        window_open=window_state == STATE_ON,
+        window_open=window_state == STATE_ON and not window_bypass,
         safety_on=safety_state == STATE_ON,
         overpowering=overpowering_state == STATE_ON,
         away=presence_state in (STATE_OFF, STATE_NOT_HOME),

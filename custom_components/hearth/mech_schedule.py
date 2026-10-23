@@ -12,7 +12,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_SCHEDULE, CONF_SOLAR_GAIN, CONF_WORKDAY, PRESET_ECO, SWITCH_PREHEAT, SWITCH_SCHEDULE
+from .const import CONF_SCHEDULE, CONF_SOLAR_GAIN, CONF_WORKDAY, DORMANT_WINDOW, PRESET_ECO, SWITCH_PREHEAT, SWITCH_SCHEDULE
 from .core.forecast import SUNNY_CONDITIONS
 from .core.preheat import HeatingRun, WarmingModel, lead_minutes, preheat_start, warming_rate
 from .core.schedule import BlockInstance, Schedule, ScheduleError
@@ -184,7 +184,10 @@ class ScheduleMixin:
             desired = plan.block
             reason = "preheat"
         self._arm_schedule_timer(now)
-        if not self.enabled(SWITCH_SCHEDULE) or self.dormant or self.standdown_active or desired is None:
+        # D57: an open window does not stop the schedule. VTherm keeps the requested preset under window frost/off and
+        # goes back to it when the window closes, so the block's preset must already be the right one by then.
+        blocked = self.dormant and self.dormant_reason != DORMANT_WINDOW
+        if not self.enabled(SWITCH_SCHEDULE) or blocked or self.standdown_active or desired is None:
             return
         if self.skip_active:
             return  # the skip owns the preset; it ends on a non-skippable block (schedule_ends_skip)

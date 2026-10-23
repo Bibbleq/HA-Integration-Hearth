@@ -12,6 +12,7 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import (
     DOMAIN,
+    SERVICE_BOOST,
     SERVICE_EXPORT_LEARNING,
     SERVICE_IMPORT_LEARNING,
     SERVICE_OVERRIDE,
@@ -96,6 +97,17 @@ def async_setup_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError("import_learning needs exactly one room")
         await rooms[0].async_import_learning(call.data["data"], call.data.get("parts"))
 
+    async def handle_boost(call: ServiceCall) -> None:
+        from .mech_learning import BOOST_SOURCES_PERSON
+
+        source = call.data.get("source")
+        if source is None:
+            source = "person" if call.context.user_id else "automation"
+        rooms = _rooms_for(hass, call, True)
+        for room in rooms:
+            await room.async_service_boost(float(call.data["minutes"]), call.data.get("temperature"), source)
+        _LOGGER.debug("boost: %s, source %s (person: %s)", [r.room_name for r in rooms], source, source in BOOST_SOURCES_PERSON)
+
     async def handle_undo_reset(call: ServiceCall) -> None:
         for room in _rooms_for(hass, call, True):
             await room.async_service_undo_reset()
@@ -105,6 +117,19 @@ def async_setup_services(hass: HomeAssistant) -> None:
         SERVICE_OVERRIDE,
         handle_override,
         schema=vol.Schema({**ROOM_SCHEMA, vol.Optional("duration"): cv.time_period}),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_BOOST,
+        handle_boost,
+        schema=vol.Schema(
+            {
+                **ROOM_SCHEMA,
+                vol.Optional("minutes", default=60): vol.All(vol.Coerce(float), vol.Range(min=1, max=1440)),
+                vol.Optional("temperature"): vol.Coerce(float),
+                vol.Optional("source"): vol.In(["person", "dashboard", "valve", "voice", "automation"]),
+            }
+        ),
     )
     hass.services.async_register(
         DOMAIN,
