@@ -601,3 +601,25 @@ door that opens after the room has reached target no longer costs the run, becau
 This measures what preheat needs: the time from switching to comfort until the room sensor reads target, including
 any minutes the valve spends idle. `learn_min_run_min` and `learn_min_rise` still apply, so a small deficit reached
 in a few minutes is not learnt from.
+
+## D55. A VTherm restoring itself at startup is not an override
+
+On a Home Assistant restart every VTherm reports `off`, no preset and `is_ready: false`, then restores its preset about
+20 s later. The restore carries no user, so 0.7.1 read it as an automation's preset change and stood live rooms down
+for 180 minutes (Living Room and Office on 2026-10-23); a room that restored to an unaffected preset escaped.
+
+A change is now a restore when the old state was `unavailable`/`unknown` or had `is_ready` false, or when it arrives
+while Home Assistant is starting or within `startup_grace_s` (180) of `homeassistant_started`. A restore is recorded in
+the ignored list with reason `startup`, does not set `last_external_change` (so it does not taint a heating run) and
+asks for Hearth's current block to be put back. A change with a person's context is never a restore. A config-entry
+reload on a running system gets no time window, only the not-ready rule.
+
+## D56. Entities write only what changed
+
+Every VTherm state change (about every 20 s per VTherm) dispatches a room update, and every Hearth entity of that
+room used to write its state each time: 26 writes per update, which multiplied the Tado Hijack startup event storm and
+tripped Home Assistant's runaway-event guard. Each entity now fingerprints its availability, state, icon and
+attributes, records the fingerprint on every write (including switch and number handlers and Home Assistant's first
+write) and skips a room update that would write the same thing. `skip_preview.computed_at` changed on every
+evaluation, so it now moves only when the preview's content changes.
+

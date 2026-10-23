@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import json
 import logging
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -32,6 +34,8 @@ from .core.test_learning_io import HALF_LIFE
 from .core.test_learning_io import entry as ledger_entry
 from .core.test_learning_io import ledger as sample_ledger
 from .core.test_learning_io import warming as sample_warming
+
+MANIFEST_VERSION = json.loads((Path(__file__).parent.parent / "custom_components" / "hearth" / "manifest.json").read_text())["version"]
 
 BEDROOM = "climate.bedroom"
 ENTRY_ID_FIELD = "entry_id"
@@ -88,7 +92,7 @@ async def test_export_single_room_returns_the_bare_blob(hass: HomeAssistant, has
     blob = await export(hass)
     assert blob["format"] == "hearth.learning" and blob["version"] == 1
     assert blob["room"] == "Living Room" and blob["vtherm"] == VTHERM
-    assert blob["hearth_version"] == "0.7.0"
+    assert blob["hearth_version"] == MANIFEST_VERSION
     assert dt_util.parse_datetime(blob["exported_at"]) is not None
     assert set(blob["parts"]) == {"warming_rate", "ledger", "running_mean"}
     assert blob["parts"]["warming_rate"] == room.warming_model.to_dict()

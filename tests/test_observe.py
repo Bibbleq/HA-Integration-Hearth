@@ -284,11 +284,9 @@ async def test_no_preset_numbers_while_observing_is_not_dormant_and_learning_wor
     assert preset_issue(hass, room) is None
     assert room.heating_run is not None and not room.heating_run.tainted
     freezer.move_to(local(today, 7, 0))
-    _set_vtherm(hass, preset="comfort", current=18.8, target=20.5, outdoor=5.0, hvac_action="heating")
+    _set_vtherm(hass, preset="comfort", current=20.5, target=20.5, outdoor=5.0, hvac_action="heating")
     await hass.async_block_till_done()
-    _set_vtherm(hass, preset="comfort", current=18.8, target=20.5, outdoor=5.0, hvac_action="idle")
-    await hass.async_block_till_done()
-    assert room.warming_model.n_runs == 1
+    assert room.warming_model.n_runs == 1  # D54: counted when the room reaches target
 
 
 async def test_going_live_without_preset_numbers_is_dormant_with_a_repair_until_they_appear(
