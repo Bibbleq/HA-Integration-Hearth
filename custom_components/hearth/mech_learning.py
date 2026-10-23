@@ -109,6 +109,7 @@ class LearningMixin:
         new_preset = new.attributes.get("preset_mode")
         old_target = _f(old.attributes.get("temperature"))
         new_target = _f(new.attributes.get("temperature"))
+        startup = self._is_startup_change(old, now)
         if new_preset is not None and new_preset != old_preset:
             if self.write_log.made_by_us(self.vtherm.entity_id, new_preset, now, window):
                 return
@@ -124,7 +125,7 @@ class LearningMixin:
                 elif old_target is not None and new_target is not None:
                     magnitude = new_target - old_target
             change = {"kind": kind, "from": old_preset, "to": new_preset, "magnitude": magnitude, "at": now.isoformat()}
-            self._record_external_change(now, kind, old_preset, new_preset, magnitude, change, self._change_origin(new))
+            self._record_external_change(now, kind, old_preset, new_preset, magnitude, change, self._change_origin(new), startup=startup)
             return
         if old_target is not None and new_target is not None and abs(new_target - old_target) > 0.01:
             # Same preset, target moved: a preset-temp number edit (ours, or someone's) or a manual setpoint.
@@ -135,7 +136,17 @@ class LearningMixin:
                     return
             magnitude = new_target - old_target
             change = {"kind": "temp", "from": old_target, "to": new_target, "magnitude": magnitude, "at": now.isoformat()}
-            self._record_external_change(now, "temp", new_preset, new_preset, magnitude, change, self._change_origin(new, number_entity))
+            self._record_external_change(
+                now, "temp", new_preset, new_preset, magnitude, change, self._change_origin(new, number_entity), startup=startup
+            )
+
+    def _is_startup_change(self, old, now: datetime) -> bool:
+        """D55: a change out of a VTherm that was unavailable or still initialising is its restore, not an override;
+        so is any change in the grace window after Home Assistant finished starting."""
+        if old.state in ("unavailable", "unknown") or old.attributes.get("is_ready") is False:
+            return True
+        until = getattr(self, "_startup_grace_until", None)
+        return until is not None and now <= until
 
     def _record_external_change(
         self,
@@ -146,8 +157,15 @@ class LearningMixin:
         magnitude: float | None,
         change: dict[str, Any],
         origin: str,
+        *,
+        startup: bool = False,
     ) -> None:
-        """A change Hearth did not make: the Scheduler's (D48), or somebody's. Somebody's is judged by `origin` (D47)."""
+        """A change Hearth did not make: a VTherm restoring itself at startup (D55), the Scheduler's (D48), or
+        somebody's. Somebody's is judged by `origin` (D47)."""
+        if startup and origin != ORIGIN_HUMAN:
+            self._ignore_override(now, kind, "startup")
+            self.request_reapply()
+            return
         if self.scheduler_grace_active(now):
             self._ignore_override(now, kind, "scheduler_source")
             self.request_reapply()

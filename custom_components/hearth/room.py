@@ -12,7 +12,8 @@ from datetime import datetime, time, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+from homeassistant.core import CALLBACK_TYPE, CoreState, Event, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import (
     EventStateChangedData,
@@ -226,6 +227,7 @@ class HearthRoom(SchedulerSourceMixin, TransferMixin, LearningMixin, ScheduleMix
             self._schedule_save()
         self.hass.data[DOMAIN]["forecast"].subscribe(self.weather_entity_id)
         await self._async_seed_if_needed()
+        self._arm_startup_grace()
         self._unsubs.append(async_track_state_change_event(self.hass, [self.vtherm.entity_id], self._on_vtherm_event))
         if outdoor := self.option(CONF_OUTDOOR_SENSOR):
             self._unsubs.append(async_track_state_change_event(self.hass, [outdoor], self._on_outdoor_event))
@@ -238,6 +240,30 @@ class HearthRoom(SchedulerSourceMixin, TransferMixin, LearningMixin, ScheduleMix
         await self.async_evaluate("setup")
         self.ready = True
         await self._reconcile_peers()
+
+    def _arm_startup_grace(self) -> None:
+        """D55: while Home Assistant is starting, and for `startup_grace_s` after it has started, VTherm changes are
+        restores. A reload on a running system gets no window: only the not-ready rule applies then."""
+        if self.hass.state is CoreState.running:
+            self._startup_grace_until = None
+            return
+        grace = timedelta(seconds=float(self.const("startup_grace_s")))
+        self._startup_grace_until = dt_util.utcnow() + timedelta(days=1)  # until HA reports started
+        fired = False
+
+        @callback
+        def _on_started(_event) -> None:
+            nonlocal fired
+            fired = True
+            self._startup_grace_until = dt_util.utcnow() + grace
+
+        unsub = self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_started)
+
+        def _cancel() -> None:
+            if not fired:
+                unsub()
+
+        self._unsubs.append(_cancel)
 
     def _register_time_triggers(self) -> None:
         """Exact-time triggers for decision times, plus forecast prefetch 15 min before each."""

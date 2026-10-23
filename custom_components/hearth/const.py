@@ -188,6 +188,7 @@ DEFAULTS: Final[dict[str, object]] = {
     # 4.8 Scheduler entities as the schedule source
     "morning_cutoff": "12:00",  # local HH:MM: the first warm-by block before this is skippable
     "scheduler_enabled_check_s": 120,  # seconds after a take-over (or a re-enable) before a still-on source raises a repair
+    "startup_grace_s": 180,  # seconds after HA finishes starting during which a VTherm change is a restore, not an override (D55)
     "source_reenable_grace_s": 15,  # seconds after a source turns on during which a preset change is the Scheduler's, not a person's (D48)
 }
 

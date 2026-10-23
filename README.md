@@ -432,4 +432,5 @@ unavailable source is only a diagnostic event and a log line.
 
 Pure maths lives in `custom_components/hearth/core/` with no Home Assistant imports and runs under plain
 `pytest`. The HA glue tests need `pytest-homeassistant-custom-component` (see `requirements_test.txt`).
+On Windows, run `pytest -p tests.winsock`: the HA test plugin's socket block otherwise stops asyncio's event loop.
 CI runs pytest, hassfest and HACS validation on every push.

@@ -253,18 +253,19 @@ class SkipMixin:
             likely = None
         else:
             likely = decision.skip
-        self.preview.update(
-            {
-                "for_date": day.isoformat(),
-                "likely": likely,
-                "reason": decision.reason,
-                "threshold": decision.threshold,
-                "forecast_high": decision.forecast_high,
-                "condition": decision.condition,
-                "computed_at": now.isoformat(),
-                "skip_enabled": self.enabled(SWITCH_SKIP),
-            }
-        )
+        fresh = {
+            "for_date": day.isoformat(),
+            "likely": likely,
+            "reason": decision.reason,
+            "threshold": decision.threshold,
+            "forecast_high": decision.forecast_high,
+            "condition": decision.condition,
+            "skip_enabled": self.enabled(SWITCH_SKIP),
+        }
+        # D56: computed_at moves only when the preview itself changes, so an unchanged preview is not rewritten
+        # (and recorded) on every evaluation.
+        if any(self.preview.get(key) != value for key, value in fresh.items()) or "computed_at" not in self.preview:
+            self.preview.update({**fresh, "computed_at": now.isoformat()})
 
     @property
     def skip_status(self) -> str:

@@ -6,7 +6,7 @@ Python 3.14, hassfest, and HACS validation.
 
 | Check | State |
 |---|---|
-| pytest (438 tests at 0.7.1: 246 pure-core, 192 HA-level) | green on CI |
+| pytest (446 tests at 0.7.2: 246 pure-core, 200 HA-level) | green on CI |
 | hassfest | green |
 | HACS validation | strict since the repo went public (see D18) |
 
@@ -100,6 +100,20 @@ real Versatile Thermostat or a real weather integration:
 
 ## Changes after the first build
 
+- **0.7.2**: a restart no longer stands rooms down (D55), and unchanged entities are not rewritten (D56).
+  A VTherm change out of an unavailable or initialising state (`is_ready` false), or any change without a person's
+  context while Home Assistant is starting and for `startup_grace_s` (180) after it has started, is a restore: it is
+  listed in `recent_ignored_overrides` with reason `startup` and Hearth puts its current block back. A person's change
+  in that window still counts. Hearth entities now write state only when their state, icon or attributes change, and
+  `skip_preview`'s `computed_at` moves only when the preview changes. Also fixes two tests 0.7.1 left failing on CI
+  (a hard-coded version, and a run that ended on idle) and adds `tests/winsock.py` for local runs on Windows
+  (`pytest -p tests.winsock`). Verify on the live system:
+  1. Restart Home Assistant: no `sensor.hearth_<room>_stand_down` shows a cause afterwards; each shows a `startup`
+     entry in `recent_ignored_overrides`.
+  2. Change a live room's preset from the dashboard within three minutes of a restart: it still stands the room down
+     with cause `manual_preset`.
+  3. Watch a `sensor.hearth_<room>_*` entity in Developer Tools > States for a few minutes with nothing happening:
+     its last-updated time no longer moves every 20 seconds.
 - **0.7.1**: warming runs end when the room reaches target instead of when the valve reports idle (D54), so
   single-valve Tado rooms learn. New constants `learn_reach_tolerance` (0.1 C) and `learn_max_run_min` (240);
   new diagnostic kind `discarded_run` with the reason. No store change. Verify on the live system:
