@@ -304,7 +304,9 @@ Phases are meant to soak for a few weeks each. Everything is per room.
    room at its Scheduler schedules (`scheduler_entity_ids` in the room options) and let Hearth do the hand-over: turn
    the schedule switch on and Hearth switches the source schedules off itself; turn it off and it switches them back
    on. Once the preset switching looks right, turn on `switch.hearth_<room>_preheat`. The warming-rate model uses a
-   conservative 1.0 C/h until it has five clean heating runs.
+   conservative 1.0 C/h until it has five clean heating runs. A run lasts from the start of the comfort block's
+   heating until the room sensor reaches target, whatever the valve reports in between; a block that ends first
+   discards it.
 4. **Override learning**: turn on `switch.hearth_<room>_override_learning`. From then on a manual preset
    or temperature change stands Hearth down for that room (until the next schedule block or 180 min) and is
    recorded in the ledger. The `learning_*` sensors show the biases and the correction each bucket would
