@@ -6,7 +6,7 @@ Python 3.14, hassfest, and HACS validation.
 
 | Check | State |
 |---|---|
-| pytest (462 tests at 0.7.3: 250 pure-core, 212 HA-level) | green on CI |
+| pytest (467 tests at 0.7.3: 250 pure-core, 217 HA-level) | green on CI |
 | hassfest | green |
 | HACS validation | strict since the repo went public (see D18) |
 
@@ -124,6 +124,15 @@ real Versatile Thermostat or a real weather integration:
   5. Check the person's `user_id` reaches the VTherm state written by the timed preset (otherwise boosts read as
      automation and are not learnt; look at `last_origin`).
   6. Boost the same room in an eco block at the same hour on three workdays: `schedule_hint` reads 1 with the slot.
+
+  Also in 0.7.3, `hearth.boost` (D61): `minutes` (default 60), optional `temperature`, optional `source`
+  (`person`, `dashboard`, `valve`, `voice` are a person's request; `automation` is not; default: a person when the call
+  has a user). With a temperature it sets the room's boost preset number (clamped 10-25 C), runs the VTherm timed preset
+  and puts the boost number back when the boost ends (also after a restart); the boost is learnt at its real size
+  (temperature minus the original preset's), in either direction. Built for the Tado setpoint keeper to turn a knob
+  turn into a room-sensor boost. Verify:
+  7. `hearth.boost` with `temperature: 21.5`, `source: valve`, `minutes: 5` on a live room in comfort: the boost number
+     reads 21.5 during the boost and its old value afterwards; `last_override` shows `magnitude: 1.0`.
 - **0.7.2**: a restart no longer stands rooms down (D55), and unchanged entities are not rewritten (D56).
   A VTherm change out of an unavailable or initialising state (`is_ready` false), or any change without a person's
   context while Home Assistant is starting and for `startup_grace_s` (180) after it has started, is a restore: it is

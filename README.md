@@ -312,6 +312,8 @@ Phases are meant to soak for a few weeks each. Everything is per room.
    preset, and learns from it by when it happened (D60): a boost in comfort says comfort or the warm-up was short, a
    boost while the schedule had the room on eco or frost is collected on `sensor.hearth_<room>_schedule_hint`, which
    suggests a comfort block once the same hour on the same kind of day has been boosted three times in four weeks.
+   `hearth.boost` does the same with an optional `temperature` and `source` (D61): use it from automations that act
+   for a person, such as turning a knob turn at a radiator valve into a boost on the room sensor.
 5. **Override learning**: turn on `switch.hearth_<room>_override_learning`. From then on a manual preset
    or temperature change stands Hearth down for that room (until the next schedule block or 180 min) and is
    recorded in the ledger. The `learning_*` sensors show the biases and the correction each bucket would

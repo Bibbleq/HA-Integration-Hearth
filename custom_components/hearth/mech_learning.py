@@ -15,7 +15,7 @@ from typing import Any
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util import dt as dt_util
 
-from .const import PRESET_NONE, RESET_WARMING_RATE, SWITCH_APPLY_LEARNING, SWITCH_LEARNING
+from .const import PRESET_BOOST, PRESET_NONE, RESET_WARMING_RATE, SWITCH_APPLY_LEARNING, SWITCH_LEARNING
 from .core.boost import NON_WORKDAY, WORKDAY, BoostEvent, prune, suggestions
 from .core.override import (
     BUCKET_BASELINE,
@@ -37,6 +37,8 @@ _LOGGER = logging.getLogger(__name__)
 
 VT_TIMED_PRESET = "timed_preset_manager"
 STANDDOWN_TIMED_PRESET = "timed_preset"
+BOOST_SOURCES_PERSON = ("person", "dashboard", "valve", "voice")
+BOOST_SOURCES = (*BOOST_SOURCES_PERSON, "automation")
 
 
 def _timed(state) -> dict[str, Any]:
@@ -122,6 +124,8 @@ class LearningMixin:
         new_target = _f(new.attributes.get("temperature"))
         startup = self._is_startup_change(old, now)
         old_tm, new_tm = _timed(old), _timed(new)
+        if not new_tm.get("is_active"):
+            self._maybe_restore_boost_temp(now)
         if new_tm.get("is_active") and (not old_tm.get("is_active") or new_preset != old_preset):
             self._on_boost_start(now, new_tm, old_preset, startup, self._change_origin(new))
             return
@@ -354,8 +358,24 @@ class LearningMixin:
         else:
             minutes = float(timed.get("remaining_time_min") or self.const("boost_default_min"))
         self._start_standdown(now, STANDDOWN_TIMED_PRESET, minutes)
+        pending = self._take_pending_boost(now)
+        wanted = None
+        if pending is not None:
+            # D61: hearth.boost says who asked and for what temperature; the VTherm write itself carries no user
+            origin = ORIGIN_HUMAN if pending["source"] in BOOST_SOURCES_PERSON else ORIGIN_AUTOMATION
+            wanted = pending.get("temperature")
+            if pending.get("restore") is not None:
+                until = now + timedelta(minutes=minutes)
+                self.learning["active_boost"] = {"restore": pending["restore"], "until": until.isoformat()}
         self.last_external_change_at = now  # a boost taints a heating run in progress
-        self.last_external_change = {"kind": "boost", "to": timed.get("preset"), "at": now.isoformat(), "origin": origin}
+        self.last_external_change = {
+            "kind": "boost",
+            "to": timed.get("preset"),
+            "at": now.isoformat(),
+            "origin": origin,
+            "source": pending["source"] if pending else None,
+            "temperature": wanted,
+        }
         if startup:
             self._ignore_override(now, "boost", "startup")
             return
@@ -367,32 +387,45 @@ class LearningMixin:
         if self.dormant:
             self._ignore_override(now, "boost", "dormant")
             return
-        self._record_boost(now, timed.get("original_preset") or old_preset)
+        self._record_boost(now, timed.get("original_preset") or old_preset, wanted)
 
     def _on_boost_end(self, now: datetime) -> None:
         """The VTherm put the original preset back (or the boost was cancelled): not an override."""
         self._ignore_override(now, "boost", "boost_ended")
+        self._maybe_restore_boost_temp(now, force=True)
         if self.standdown.cause == STANDDOWN_TIMED_PRESET:
             self.standdown.clear()
         self.request_reapply()
 
-    def _record_boost(self, now: datetime, original: str | None) -> None:
-        """What a boost says depends on when it happened (D60)."""
+    def _record_boost(self, now: datetime, original: str | None, wanted: float | None = None) -> None:
+        """What a boost says depends on when it happened (D60) and, when a temperature was asked for, how far (D61)."""
         affected = tuple(self.affected_presets)
-        skip_recent = self.skip.get("status") == "active" or (
-            self.skip_ended_minutes_ago is not None and self.skip_ended_minutes_ago <= float(self.const("skip_ended_learning_window_min"))
+        target = self.vtherm.preset_temp(original) if original else None
+        direction, magnitude, raw = 1, float(self.const("boost_signal_c")), None
+        if wanted is not None and target is not None:
+            raw = wanted - target
+            if abs(raw) < 0.25:
+                self._ignore_override(now, "boost", "no_magnitude")
+                return
+            direction, magnitude = (1 if raw > 0 else -1), abs(raw)
+        skip_window = float(self.const("skip_ended_learning_window_min"))
+        skip_recent = direction > 0 and (
+            self.skip.get("status") == "active" or (self.skip_ended_minutes_ago is not None and self.skip_ended_minutes_ago <= skip_window)
         )
         if original not in affected and not skip_recent:
-            self._record_boost_pattern(now, original)
+            if direction > 0:
+                self._record_boost_pattern(now, original)
+            else:
+                self._ignore_override(now, "boost", "unaffected_preset")  # turning a low room down says nothing
             return
         ctx = self._override_context(now, original if original in affected else (affected[0] if affected else original))
         exclusion = qualifies(ctx)
         if exclusion:
             self._ignore_override(now, "boost", exclusion)
             return
-        target = self.vtherm.preset_temp(original) if original else None
         current = self.snapshot.current_temp
-        below = target is not None and current is not None and current < target - float(self.const("boost_below_target_margin"))
+        margin = float(self.const("boost_below_target_margin"))
+        below = direction > 0 and target is not None and current is not None and current < target - margin
         if skip_recent:
             bucket, weight = BUCKET_SKIP, 2.0
         elif below:
@@ -400,12 +433,13 @@ class LearningMixin:
         else:
             bucket, weight = attribute(
                 ctx,
-                1,
+                direction,
                 preheat_window_min=float(self.const("preheat_shortfall_window_min")),
-                skip_after_window_min=float(self.const("skip_ended_learning_window_min")),
+                skip_after_window_min=skip_window,
             )
-        # A boost's size is the boost preset's, not the person's choice: direction only, at a fixed small magnitude.
-        self._add_ledger_entry(now, ctx, 1, float(self.const("boost_signal_c")), bucket, weight, "boost", original)
+        # Without a chosen temperature a boost's size is the boost preset's, not the person's: direction only, at a
+        # fixed small magnitude. With one (a knob turn, D61) the difference from the target is the person's own.
+        self._add_ledger_entry(now, ctx, direction, magnitude, bucket, weight, "boost", original, raw_magnitude=raw)
 
     def _record_boost_pattern(self, now: datetime, original: str | None) -> None:
         local = dt_util.as_local(now)
@@ -428,6 +462,60 @@ class LearningMixin:
                     f"the room on {presets}: consider a comfort block",
                 )
         self._ignore_override(now, "boost", "schedule_pattern")
+
+    async def async_service_boost(self, minutes: float, temperature: float | None, source: str) -> None:
+        """D61: run a VTherm timed boost on Hearth's behalf, optionally at a chosen temperature, and say who asked."""
+        now = dt_util.utcnow()
+        restore = None
+        if temperature is not None:
+            lo, hi = float(self.const("boost_min_c")), float(self.const("boost_max_c"))
+            value = min(max(round(float(temperature) * 2) / 2, lo), hi)
+            previous = self.vtherm.preset_temp(PRESET_BOOST)
+            if await self.async_write_preset_temp(PRESET_BOOST, value, lo, hi, now, "boost"):
+                restore, temperature = previous, value
+            else:
+                self._diagnostic("boost", "No boost preset number on this VTherm: boosting at its usual boost temperature")
+                temperature = None
+        self._pending_boost = {"at": now, "source": source, "temperature": temperature, "restore": restore}
+        try:
+            await self.hass.services.async_call(
+                "versatile_thermostat",
+                "set_timed_preset",
+                {"entity_id": self.vtherm.entity_id, "preset": PRESET_BOOST, "duration_minutes": max(1, round(minutes))},
+                blocking=True,
+            )
+        except Exception:
+            self._pending_boost = None
+            if restore is not None:
+                await self._write_boost_temp(restore, now, "boost_restore")
+            raise
+        self._diagnostic(
+            "boost",
+            f"Boost for {minutes:.0f} min ({source}{f', {temperature:.1f} C' if temperature is not None else ''})",
+        )
+
+    def _take_pending_boost(self, now: datetime) -> dict[str, Any] | None:
+        pending = getattr(self, "_pending_boost", None)
+        self._pending_boost = None
+        if pending is None or (now - pending["at"]).total_seconds() > float(self.const("boost_pending_s")):
+            return None
+        return pending
+
+    def _maybe_restore_boost_temp(self, now: datetime, *, force: bool = False) -> None:
+        """Put the boost preset temperature back after a hearth.boost at a chosen temperature (also after a restart)."""
+        active = self.learning.get("active_boost")
+        if not active:
+            return
+        until = datetime.fromisoformat(active["until"]) if active.get("until") else None
+        if not force and until is not None and now < until:
+            return
+        self.learning.pop("active_boost", None)
+        if active.get("restore") is not None:
+            self.hass.async_create_task(self._write_boost_temp(float(active["restore"]), now, "boost_restore"))
+
+    async def _write_boost_temp(self, value: float, now: datetime, reason: str) -> None:
+        lo, hi = float(self.const("boost_min_c")), float(self.const("boost_max_c"))
+        await self.async_write_preset_temp(PRESET_BOOST, min(max(value, lo), hi), lo, hi, now, reason)
 
     def boost_suggestions(self, now: datetime) -> list[dict[str, Any]]:
         events = [BoostEvent.from_dict(e) for e in self.learning.get("boost_events", [])]

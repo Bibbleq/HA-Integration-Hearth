@@ -669,3 +669,21 @@ about how much warmer the person wanted it. Decay and the three-event minimum be
 (coming in from the cold, illness, a guest) from moving anything. Hearth never edits a schedule; the Scheduler card
 stays the place to change it. Boost events are not part of the learning export (they are short-lived evidence).
 
+## D61. hearth.boost: a timed boost at a chosen temperature, on a person's behalf
+
+Knob turns at a Tado valve reach Home Assistant through the setpoint keeper, an automation, so a timed preset it
+starts carries no user and D60 would not learn from it; and a knob turn chooses a temperature, which a timed preset
+(fixed boost temperature) cannot carry. `hearth.boost` runs the VTherm timed preset itself: with a `temperature` it
+first writes the room's boost preset number (the one preset Hearth never otherwise touches unless it is an affected
+preset) and restores it when the boost ends, or on the first VTherm update after the boost's end if HA restarted. A
+`source` of person, dashboard, valve or voice makes the boost a person's for learning; without a source, a call with a
+user is a person's and one without is an automation's.
+
+With a chosen temperature the ledger magnitude is the person's own: temperature minus the original preset's
+temperature, either direction, capped like any override. A turn-down in eco or frost says nothing and is ignored; a
+turn-up there joins the schedule pattern (D60). The keeper converts the knob value into room terms first (knob minus
+the valve-reading-minus-room-reading gap) so the boost runs on the room sensor, not the radiator.
+
+Dashboard boosts can keep calling `versatile_thermostat.set_timed_preset` directly: D60 recognises them, and the
+person's user on the call is enough.
+

@@ -235,6 +235,32 @@
     }
   },
   "services": {
+    "boost": {
+      "name": "Boost",
+      "description": "Boost a room with Versatile Thermostat's timed preset, optionally at a chosen temperature, and tell Hearth who asked.",
+      "fields": {
+        "entry_id": {
+          "name": "Room",
+          "description": "The Hearth room (config entry)."
+        },
+        "vtherm_entity_id": {
+          "name": "VTherm",
+          "description": "Alternatively, the VTherm climate entity the room drives."
+        },
+        "minutes": {
+          "name": "Minutes",
+          "description": "How long the boost lasts. Versatile Thermostat restores the previous preset afterwards."
+        },
+        "temperature": {
+          "name": "Temperature",
+          "description": "Optional room temperature for the boost. Without it the room's boost preset temperature is used."
+        },
+        "source": {
+          "name": "Source",
+          "description": "Who asked: person, dashboard, valve or voice are a person's request and are learnt from; automation is not. Defaults to the caller."
+        }
+      }
+    },
     "override": {
       "name": "Override",
       "description": "Stand Hearth down for a room so it heats normally for a while.",
