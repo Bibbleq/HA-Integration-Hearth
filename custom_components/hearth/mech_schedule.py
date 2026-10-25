@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -16,6 +16,7 @@ from .const import CONF_SCHEDULE, CONF_SOLAR_GAIN, CONF_WORKDAY, DORMANT_WINDOW,
 from .core.forecast import SUNNY_CONDITIONS
 from .core.preheat import HeatingRun, WarmingModel, lead_minutes, preheat_start, warming_rate
 from .core.schedule import BlockInstance, Schedule, ScheduleError
+from .mech_learning import STANDDOWN_TIMED_PRESET
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class PreheatPlan:
     start: datetime
     t_out: float | None
     solar_discount: float
+    latched: bool = False  # D62: preheat is running; `start` is when it started, not a fresh estimate
 
 
 class ScheduleMixin:
@@ -179,10 +181,10 @@ class ScheduleMixin:
         current = self.current_block(now)
         desired = current
         reason = "schedule"
-        plan = self.preheat_plan
-        if self.enabled(SWITCH_SCHEDULE) and self.enabled(SWITCH_PREHEAT) and plan is not None and plan.start <= now < plan.block.start:
-            desired = plan.block
+        if (latched := self._update_preheat_latch(now)) is not None:
+            desired = latched
             reason = "preheat"
+        self._freeze_preheat_plan()
         self._arm_schedule_timer(now)
         # D57: an open window does not stop the schedule. VTherm keeps the requested preset under window frost/off and
         # goes back to it when the window closes, so the block's preset must already be the right one by then.
@@ -201,6 +203,105 @@ class ScheduleMixin:
         if self.snapshot.preset != desired.preset:
             await self.async_set_preset(desired.preset, now, reason)
         self.sched.update({"applied_key": desired.key, "applied_at": now.isoformat(), "applied_by": reason})
+
+    # ------------------------------------------------------------- preheat latch
+
+    @property
+    def preheat_latched(self) -> bool:
+        return bool(self.sched.get("preheat"))
+
+    def _update_preheat_latch(self, now: datetime) -> BlockInstance | None:
+        """D62: once preheat has started it holds the warm-by block's preset until that block starts.
+
+        The plan is recomputed on every evaluation and its start moves later as the room warms, so a preheat judged
+        afresh each time fell back to the current block within minutes and came back on later (Living Room on
+        24 Oct: on at 05:00, 05:51, 06:04, 06:18 and 06:39, back to eco in between). Latched, it ends only at the
+        block start, when the schedule no longer has that block, or when Hearth has to let go of the room: preheat or
+        the schedule switched off, dormant other than an open window (D57), a stand-down other than a timed boost, a
+        forecast skip. A room that reaches its target early stays on the block's preset (the VTherm idles at target);
+        dropping back would only start the warm-up again. A timed boost keeps the latch, so the warm-up carries on
+        when the boost ends (D63). Returns the block to drive while latched, else None.
+        """
+        plan = self.preheat_plan
+        can_act = self.enabled(SWITCH_SCHEDULE) and self.enabled(SWITCH_PREHEAT)
+        blocked = self.dormant and self.dormant_reason != DORMANT_WINDOW
+        held = self.standdown_active and self.standdown.cause != STANDDOWN_TIMED_PRESET
+        if latch := self.sched.get("preheat"):
+            block = self.schedule_model.next_warm_by(now, self.tz)
+            block_start = _dt(latch.get("block_start"))
+            end = None
+            if block_start is None or now >= block_start:
+                end = "block_started"
+            elif block is None or block.key != latch.get("key"):
+                end = "schedule_changed"
+            elif not can_act:
+                end = "switched_off"
+            elif blocked:
+                end = self.dormant_reason or "dormant"
+            elif held:
+                end = "standdown"
+            elif self.skip_active:
+                end = "skip"
+            if end is None:
+                return block
+            self._end_preheat_latch(now, end)
+        if not can_act or blocked or held or self.skip_active or plan is None or now >= plan.block.start:
+            return None
+        bridged = self._boost_hands_over(now, plan)
+        if plan.start > now and not bridged:
+            return None
+        self.sched.pop("boost_ended_at", None)
+        self.sched["preheat"] = {
+            "key": plan.block.key,
+            "block_start": plan.block.start.isoformat(),
+            "started_at": now.isoformat(),
+            "start_temp": self.snapshot.current_temp,
+            "target": plan.target,
+            "why": "boost_ended" if bridged and plan.start > now else "plan",
+        }
+        self.sched["preheat_changed_at"] = now.isoformat()
+        self._mark_settle("preheat", now)
+        self._diagnostic(
+            "preheat",
+            f"Preheating for {plan.block.preset} by {dt_util.as_local(plan.block.start):%H:%M}"
+            f"{' (a boost just ended)' if bridged and plan.start > now else f' (estimated {plan.lead_min:.0f} min)'}",
+        )
+        return plan.block
+
+    def _end_preheat_latch(self, now: datetime, reason: str) -> None:
+        latch = self.sched.pop("preheat", None)
+        if latch is None:
+            return
+        self.sched["preheat_changed_at"] = now.isoformat()
+        self._mark_settle("preheat", now)
+        started = _dt(latch.get("started_at"))
+        since = f", running since {dt_util.as_local(started):%H:%M}" if started else ""
+        self._diagnostic("preheat", f"Preheat ended: {reason}{since}")
+
+    def _boost_hands_over(self, now: datetime, plan: PreheatPlan) -> bool:
+        """D63: a timed boost that has just ended close to a warm-by block goes straight to that block's preset.
+
+        Without this the room fell to eco between the boost and the block (Main Bedroom on 24 Oct: boost ended
+        06:28, eco until the 07:00 comfort block), because the room was warm from the boost and the fresh plan had
+        no deficit to preheat for.
+        """
+        ended = _dt(self.sched.get("boost_ended_at"))
+        if ended is None:
+            return False
+        if now - ended > timedelta(minutes=float(self.const("boost_end_seen_min"))):
+            self.sched.pop("boost_ended_at", None)
+            return False
+        return plan.block.start - now <= timedelta(minutes=float(self.const("boost_end_bridge_min")))
+
+    def _freeze_preheat_plan(self) -> None:
+        """D62: while latched, show when preheat started rather than an estimate that keeps moving."""
+        latch = self.sched.get("preheat")
+        plan = self.preheat_plan
+        started = _dt(latch.get("started_at")) if latch else None
+        if plan is None or started is None or plan.block.key != latch.get("key"):
+            return
+        lead = max(0.0, (plan.block.start - started).total_seconds() / 60)
+        self.preheat_plan = replace(plan, start=started, lead_min=lead, latched=True)
 
     def _arm_schedule_timer(self, now: datetime) -> None:
         """One-shot timer for the next instant the schedule needs to act."""

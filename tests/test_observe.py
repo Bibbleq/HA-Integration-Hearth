@@ -94,7 +94,7 @@ async def test_an_existing_empty_settings_store_stays_live(hass: HomeAssistant, 
 
 
 async def test_observe_blocks_adaptive_but_still_computes_the_target(hass: HomeAssistant, hass_storage, services) -> None:
-    seed_store(hass_storage, t_rm=5.0, settings={**ALL_ON, "observe": True})
+    seed_store(hass_storage, t_rm=15.0, settings={**ALL_ON, "observe": True})
     set_vtherm(hass, preset="comfort", current=19.0)
     set_numbers(hass, comfort=20.5)
     room = await setup_room(hass, make_entry())
@@ -184,7 +184,7 @@ async def test_observe_does_not_apply_learned_corrections_but_the_target_shows_t
 async def test_observe_records_external_changes_but_stands_nothing_down(hass: HomeAssistant, hass_storage, services, freezer) -> None:
     today = dt_util.start_of_local_day()
     await tick(hass, freezer, local(today, 15, 0))
-    seed_store(hass_storage, t_rm=14.0, settings={**ALL_ON, "observe": True})
+    seed_store(hass_storage, t_rm=7.5, settings={**ALL_ON, "observe": True})
     _set_vtherm(hass, user_id="ben", preset="comfort", current=19.0, target=21.0)
     set_numbers(hass, comfort=21.0)
     room = await setup_room(hass, make_entry())

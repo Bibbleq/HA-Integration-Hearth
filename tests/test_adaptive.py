@@ -34,7 +34,7 @@ async def test_setup_creates_entities_and_seeds(hass: HomeAssistant, services) -
 
 async def test_adaptive_writes_comfort_preset_after_hold(hass: HomeAssistant, hass_storage, services) -> None:
     # T_rm 14 -> offset +0.6 -> 21.1 -> 21.0 written
-    seed_store(hass_storage, t_rm=14.0)
+    seed_store(hass_storage, t_rm=7.5)
     set_vtherm(hass, outdoor=12.0)
     set_numbers(hass, comfort=20.5)
     room = await setup_room(hass, make_entry())
@@ -50,7 +50,7 @@ async def test_adaptive_writes_comfort_preset_after_hold(hass: HomeAssistant, ha
 
 
 async def test_adaptive_respects_band_and_max_offset(hass: HomeAssistant, hass_storage, services) -> None:
-    seed_store(hass_storage, t_rm=40.0)  # requested +4.5, capped to +1.5, band max 22.0 -> 22.0
+    seed_store(hass_storage, t_rm=-20.0)  # requested +4.5, capped to +1.5, band max 22.0 -> 22.0
     set_vtherm(hass)
     set_numbers(hass, comfort=20.5)
     room = await setup_room(hass, make_entry())
@@ -58,11 +58,11 @@ async def test_adaptive_respects_band_and_max_offset(hass: HomeAssistant, hass_s
     # Never above band even with a silly max_offset
     await room.async_set_setting("max_offset", 5.0)
     assert all(c.data["value"] <= 22.0 for c in services["set_value"])
-    seed_store(hass_storage, t_rm=-40.0)
+    seed_store(hass_storage, t_rm=60.0)
 
 
 async def test_adaptive_never_below_band(hass: HomeAssistant, hass_storage, services) -> None:
-    seed_store(hass_storage, t_rm=-40.0)
+    seed_store(hass_storage, t_rm=60.0)
     set_vtherm(hass)
     set_numbers(hass, comfort=20.5)
     room = await setup_room(hass, make_entry())
@@ -72,7 +72,7 @@ async def test_adaptive_never_below_band(hass: HomeAssistant, hass_storage, serv
 
 
 async def test_no_write_when_dormant(hass: HomeAssistant, hass_storage, services) -> None:
-    seed_store(hass_storage, t_rm=14.0)
+    seed_store(hass_storage, t_rm=7.5)
     set_vtherm(hass, window="on")
     set_numbers(hass, comfort=20.5)
     room = await setup_room(hass, make_entry())
@@ -88,7 +88,7 @@ async def test_no_write_when_dormant(hass: HomeAssistant, hass_storage, services
 
 
 async def test_dormant_reasons(hass: HomeAssistant, hass_storage, services) -> None:
-    seed_store(hass_storage, t_rm=14.0)
+    seed_store(hass_storage, t_rm=7.5)
     set_vtherm(hass, presence="off")
     set_numbers(hass)
     room = await setup_room(hass, make_entry())
@@ -121,7 +121,7 @@ async def test_dormant_reasons(hass: HomeAssistant, hass_storage, services) -> N
 
 
 async def test_global_switch_off_disables_everything(hass: HomeAssistant, hass_storage, services) -> None:
-    seed_store(hass_storage, t_rm=14.0)
+    seed_store(hass_storage, t_rm=7.5)
     set_vtherm(hass)
     set_numbers(hass, comfort=20.5)
     room = await setup_room(hass, make_entry())
@@ -138,7 +138,7 @@ async def test_global_switch_off_disables_everything(hass: HomeAssistant, hass_s
 
 
 async def test_mechanism_switch_off_stops_writes(hass: HomeAssistant, hass_storage, services) -> None:
-    seed_store(hass_storage, t_rm=14.0, settings={"adaptive": False})
+    seed_store(hass_storage, t_rm=7.5, settings={"adaptive": False})
     set_vtherm(hass)
     set_numbers(hass, comfort=20.5)
     room = await setup_room(hass, make_entry())
@@ -154,7 +154,7 @@ async def test_mechanism_switch_off_stops_writes(hass: HomeAssistant, hass_stora
 
 async def test_restart_is_idempotent(hass: HomeAssistant, hass_storage, services) -> None:
     """Store says we already wrote 21.0 and the number shows it: no write on restart."""
-    seed_store(hass_storage, t_rm=14.0, extra={"last_written": {"comfort": 21.0}})
+    seed_store(hass_storage, t_rm=7.5, extra={"last_written": {"comfort": 21.0}})
     set_vtherm(hass)
     set_numbers(hass, comfort=21.0)
     await setup_room(hass, make_entry())
@@ -162,7 +162,7 @@ async def test_restart_is_idempotent(hass: HomeAssistant, hass_storage, services
 
 
 async def test_manual_edit_stands_until_target_changes(hass: HomeAssistant, hass_storage, services) -> None:
-    seed_store(hass_storage, t_rm=14.0, extra={"last_written": {"comfort": 21.0}})
+    seed_store(hass_storage, t_rm=7.5, extra={"last_written": {"comfort": 21.0}})
     set_vtherm(hass)
     set_numbers(hass, comfort=19.5)  # someone turned it down by hand
     room = await setup_room(hass, make_entry())
@@ -173,7 +173,7 @@ async def test_manual_edit_stands_until_target_changes(hass: HomeAssistant, hass
 
 
 async def test_recompute_service_forces_write(hass: HomeAssistant, hass_storage, services) -> None:
-    seed_store(hass_storage, t_rm=14.0, extra={"last_written": {"comfort": 21.0}})
+    seed_store(hass_storage, t_rm=7.5, extra={"last_written": {"comfort": 21.0}})
     set_vtherm(hass)
     set_numbers(hass, comfort=19.5)
     await setup_room(hass, make_entry())
@@ -213,7 +213,7 @@ async def test_daily_roll_updates_running_mean(hass: HomeAssistant, hass_storage
 
 
 async def test_outdoor_unavailable_freezes(hass: HomeAssistant, hass_storage, services) -> None:
-    seed_store(hass_storage, t_rm=14.0)
+    seed_store(hass_storage, t_rm=7.5)
     set_vtherm(hass, outdoor=None)
     set_numbers(hass)
     events = []
@@ -226,7 +226,7 @@ async def test_outdoor_unavailable_freezes(hass: HomeAssistant, hass_storage, se
 
 
 async def test_missing_preset_numbers_is_dormant(hass: HomeAssistant, hass_storage, services) -> None:
-    seed_store(hass_storage, t_rm=14.0)
+    seed_store(hass_storage, t_rm=7.5)
     set_vtherm(hass)
     room = await setup_room(hass, make_entry())
     assert room.dormant_reason == "no_preset_entities"

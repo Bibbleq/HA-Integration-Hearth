@@ -27,7 +27,7 @@ def set_vtherm(hass: HomeAssistant, state: str = "heat", **kwargs) -> None:
 async def test_manual_preset_change_stands_down_and_records(hass: HomeAssistant, hass_storage, services, freezer) -> None:
     today = dt_util.start_of_local_day()
     await tick(hass, freezer, local(today, 15, 0))
-    seed_store(hass_storage, t_rm=14.0, settings=LEARN, extra={"last_written": {"comfort": 21.0}})
+    seed_store(hass_storage, t_rm=7.5, settings=LEARN, extra={"last_written": {"comfort": 21.0}})
     set_vtherm(hass, preset="comfort", current=19.0, target=21.0)
     set_numbers(hass, comfort=21.0)
     room = await setup_room(hass, make_entry(options={"weather_entity_id": WEATHER}))
@@ -45,7 +45,7 @@ async def test_manual_preset_change_stands_down_and_records(hass: HomeAssistant,
     entry = room.ledger.entries[0]
     assert entry.direction == 1 and entry.magnitude == 1.0 and entry.kind == "preset"
     assert entry.bucket == "baseline_error"
-    assert entry.t_rm == 14.0
+    assert entry.t_rm == 7.5
     # Adaptive is held while standing down even if the target moves
     await room.async_set_setting("adaptive_slope", 0.3)
     assert services["set_value"] == []
@@ -59,7 +59,7 @@ async def test_manual_preset_change_stands_down_and_records(hass: HomeAssistant,
 async def test_temp_edit_records_and_our_own_writes_do_not(hass: HomeAssistant, hass_storage, services, freezer) -> None:
     today = dt_util.start_of_local_day()
     await tick(hass, freezer, local(today, 15, 0))
-    seed_store(hass_storage, t_rm=14.0, settings=LEARN)
+    seed_store(hass_storage, t_rm=7.5, settings=LEARN)
     set_vtherm(hass, preset="comfort", current=19.0, target=20.5)
     set_numbers(hass, comfort=20.5)
     room = await setup_room(hass, make_entry(options={"weather_entity_id": WEATHER}))
@@ -81,7 +81,7 @@ async def test_temp_edit_records_and_our_own_writes_do_not(hass: HomeAssistant, 
 async def test_learning_switch_off_records_nothing(hass: HomeAssistant, hass_storage, services, freezer) -> None:
     today = dt_util.start_of_local_day()
     await tick(hass, freezer, local(today, 15, 0))
-    seed_store(hass_storage, t_rm=14.0)
+    seed_store(hass_storage, t_rm=7.5)
     set_vtherm(hass, preset="comfort", current=19.0, target=20.5)
     set_numbers(hass)
     room = await setup_room(hass, make_entry(options={"weather_entity_id": WEATHER}))
@@ -95,7 +95,7 @@ async def test_learning_switch_off_records_nothing(hass: HomeAssistant, hass_sto
 async def test_exclusions_dormant_storm_unaffected(hass: HomeAssistant, hass_storage, services, freezer) -> None:
     today = dt_util.start_of_local_day()
     await tick(hass, freezer, local(today, 15, 0))
-    seed_store(hass_storage, t_rm=14.0, settings=LEARN)
+    seed_store(hass_storage, t_rm=7.5, settings=LEARN)
     set_vtherm(hass, preset="comfort", current=19.0, target=20.5, window="on")
     set_numbers(hass)
     room = await setup_room(hass, make_entry(options={"weather_entity_id": WEATHER}))
@@ -184,8 +184,8 @@ async def test_slope_bucket_when_cold(hass: HomeAssistant, hass_storage, service
     today = dt_util.start_of_local_day()
     await tick(hass, freezer, local(today, 15, 0))
     seed_store(hass_storage, t_rm=2.0, settings=LEARN)
-    set_vtherm(hass, preset="comfort", current=19.0, target=20.5)
-    set_numbers(hass)
+    set_vtherm(hass, preset="comfort", current=19.0, target=21.5)
+    set_numbers(hass, comfort=21.5)  # what D65 asks for at T_rm 2: 20.5 + 0.15 * 8 = 21.7 -> 21.5
     room = await setup_room(hass, make_entry(options={"weather_entity_id": WEATHER}))
     services["set_value"].clear()
     set_vtherm(hass, preset="boost", current=19.0, target=22.0)
@@ -226,7 +226,7 @@ async def test_apply_learning_never_escapes_band(hass: HomeAssistant, hass_stora
     now = dt_util.utcnow()
     stats = {"mean": 1.0, "weight": 4.0, "pos": 4.0, "neg": 0.0, "events": 4, "last_at": now.isoformat()}
     ledger = {"entries": [], "buckets": {"baseline_error": stats, "slope_error": dict(stats)}, "max_entries": 200}
-    seed_store(hass_storage, t_rm=40.0, settings={**LEARN, "apply_learning": True}, extra={"mechanisms": {"ledger": ledger}})
+    seed_store(hass_storage, t_rm=-20.0, settings={**LEARN, "apply_learning": True}, extra={"mechanisms": {"ledger": ledger}})
     set_vtherm(hass, preset="comfort", current=19.0, target=20.5)
     set_numbers(hass, comfort=20.5)
     await setup_room(hass, make_entry(options={"weather_entity_id": WEATHER, "band_max": 21.5}))
@@ -259,7 +259,7 @@ async def test_apply_learning_skip_threshold_and_safety_factor(hass: HomeAssista
 async def test_override_service_and_reset_learning(hass: HomeAssistant, hass_storage, services, freezer) -> None:
     today = dt_util.start_of_local_day()
     await tick(hass, freezer, local(today, 6, 50))
-    seed_store(hass_storage, t_rm=14.0, settings={**LEARN, "skip": True})
+    seed_store(hass_storage, t_rm=7.5, settings={**LEARN, "skip": True})
     set_vtherm(hass, preset="comfort", current=18.0, target=20.5)
     set_numbers(hass)
     install_weather(hass, high=25.0)
@@ -299,7 +299,7 @@ async def test_reset_learning_warming_rate(hass: HomeAssistant, hass_storage, se
     """bucket=warming_rate clears the model, the run in progress and the preheat plan, not the ledger (D38)."""
     today = dt_util.start_of_local_day()
     await tick(hass, freezer, local(today, 6, 50))
-    seed_store(hass_storage, t_rm=14.0, settings=LEARN)
+    seed_store(hass_storage, t_rm=7.5, settings=LEARN)
     set_vtherm(hass, preset="comfort", current=18.0, target=20.5)
     set_numbers(hass)
     room = await setup_room(hass, make_entry())
@@ -325,7 +325,7 @@ async def test_standdown_survives_restart(hass: HomeAssistant, hass_storage, ser
     until = local(today, 17, 0)
     seed_store(
         hass_storage,
-        t_rm=14.0,
+        t_rm=7.5,
         settings=LEARN,
         extra={
             "mechanisms": {
@@ -345,7 +345,7 @@ async def test_standdown_survives_restart(hass: HomeAssistant, hass_storage, ser
 async def test_skip_floor_abort_still_applies_during_standdown(hass: HomeAssistant, hass_storage, services, freezer) -> None:
     today = dt_util.start_of_local_day()
     await tick(hass, freezer, local(today, 6, 50))
-    seed_store(hass_storage, t_rm=14.0, settings={**LEARN, "skip": True})
+    seed_store(hass_storage, t_rm=7.5, settings={**LEARN, "skip": True})
     set_vtherm(hass, preset="comfort", current=18.0, target=20.5)
     set_numbers(hass)
     install_weather(hass, high=25.0)

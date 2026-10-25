@@ -174,24 +174,46 @@ def test_state_roundtrip():
 
 
 def test_comfort_target_basic():
-    # T_base 20.5, slope 0.15, T_rm 14 -> offset +0.6 -> 21.1 -> quantised 21.0
-    r = comfort_target(20.5, 0.15, 14.0, 10.0, 18.0, 22.0, 1.5)
+    # D65: colder outside, warmer inside. T_base 20.5, slope 0.15, T_rm 7.5 -> offset +0.375 -> 20.875 -> 21.0
+    r = comfort_target(20.5, 0.15, 7.5, 10.0, 18.0, 22.0, 1.5)
     assert isinstance(r, ComfortResult)
-    assert r.offset_requested == pytest.approx(0.6)
-    assert r.target == pytest.approx(21.1)
+    assert r.offset_requested == pytest.approx(0.375)
+    assert r.raw_target == pytest.approx(20.875)
+    assert r.target == pytest.approx(20.875)
     assert r.quantised == 21.0
     assert not r.held
 
 
-def test_comfort_target_cold_spell_lowers_nothing_beyond_band():
-    r = comfort_target(20.5, 0.15, -20.0, 10.0, 18.0, 22.0, 1.5)
+def test_comfort_target_warm_spell_lowers_comfort():
+    # T_rm 14 (warmer than T_ref) -> offset -0.6 -> 19.9 -> 20.0
+    r = comfort_target(20.5, 0.15, 14.0, 10.0, 18.0, 22.0, 1.5)
+    assert r.offset_requested == pytest.approx(-0.6)
+    assert r.quantised == 20.0
+
+
+def test_comfort_target_freezing_running_mean_caps_at_max_offset():
+    # T_rm 0 -> requested +1.5 -> capped at +1.5 -> 22.0, which is also band_max
+    r = comfort_target(20.5, 0.15, 0.0, 10.0, 18.0, 22.0, 1.5)
+    assert r.offset_requested == pytest.approx(1.5)
+    assert r.offset_applied == pytest.approx(1.5)
+    assert r.quantised == 22.0
+    # Colder still: requested +3.0, still capped at +1.5
+    r = comfort_target(20.5, 0.15, -10.0, 10.0, 18.0, 22.0, 1.5)
+    assert r.offset_requested == pytest.approx(3.0) and r.quantised == 22.0
+    # A narrower band wins over the offset cap
+    r = comfort_target(20.5, 0.15, 0.0, 10.0, 18.0, 21.5, 1.5)
+    assert r.quantised == 21.5
+
+
+def test_comfort_target_hot_spell_lowers_nothing_beyond_band():
+    r = comfort_target(20.5, 0.15, 40.0, 10.0, 18.0, 22.0, 1.5)
     # requested -4.5, capped at -1.5 -> 19.0, within band
     assert r.offset_applied == pytest.approx(-1.5)
     assert r.quantised == 19.0
 
 
 def test_comfort_target_band_clamp_beats_offset_cap():
-    r = comfort_target(21.5, 0.15, 25.0, 10.0, 18.0, 22.0, 1.5)
+    r = comfort_target(21.5, 0.15, -5.0, 10.0, 18.0, 22.0, 1.5)
     # requested +2.25 -> capped +1.5 -> 23.0 -> clamped to 22.0
     assert r.target == 22.0
     assert r.quantised == 22.0

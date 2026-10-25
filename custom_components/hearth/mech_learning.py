@@ -63,6 +63,7 @@ class LearningMixin:
         self._override_undo: dict[str, Any] | None = None
         self.standdown = StandDown()
         self.ledger = Ledger()
+        self._settle_marks: dict[str, datetime] = {}
 
     @property
     def learning(self) -> dict[str, Any]:
@@ -91,6 +92,32 @@ class LearningMixin:
         boundary = None if minutes is not None else self.next_boundary(now)
         self.standdown = StandDown(until=standdown_until(now, boundary, timeout), cause=cause, started_at=now)
         self._diagnostic("standdown", f"Standing down until {dt_util.as_local(self.standdown.until):%H:%M} ({cause})")
+
+    # ------------------------------------------------------------- settle window (D64)
+
+    def _mark_settle(self, kind: str, now: datetime) -> None:
+        self._settle_marks[kind] = now
+
+    def _settling(self, now: datetime) -> str | None:
+        """D64: the reason a change right now is not learnt from, or None.
+
+        For a while after Hearth writes, wakes from dormancy, starts or ends a preheat, or a boost ends, the VTherm
+        and the valves are still catching up, and what looks like a person's change is often the house settling:
+        a Tado valve reporting the setpoint it was just sent (Main Bedroom 24 Oct 05:28, "knob" to 25 C five minutes
+        after preheat came back on) or one that has not caught up yet (Living Room 24 Oct 13:14, eight minutes after
+        waking from Away). The stand-down still happens; only the ledger and boost patterns skip it. Hearth's own
+        writes for hearth.boost do not count, or no boost could ever be learnt.
+        """
+        window = timedelta(minutes=float(self.const("learning_settle_min")))
+        marks = dict(self._settle_marks)
+        for rec in reversed(self.write_log.records):
+            if not rec.reason.startswith("boost"):
+                marks["own_write"] = rec.at
+                break
+        for kind, at in marks.items():
+            if timedelta(0) <= now - at < window:
+                return f"settling_{kind}"
+        return None
 
     # ------------------------------------------------------------- detection
 
@@ -281,6 +308,9 @@ class LearningMixin:
         if magnitude is None or abs(magnitude) < 0.01:
             self._ignore_override(now, kind, "no_magnitude")
             return
+        if settling := self._settling(now):
+            self._ignore_override(now, kind, settling)
+            return
         direction = 1 if magnitude > 0 else -1
         ctx = self._override_context(now, old_preset)
         exclusion = qualifies(ctx, new_preset=new_preset if kind == "preset" else None)
@@ -392,6 +422,8 @@ class LearningMixin:
     def _on_boost_end(self, now: datetime) -> None:
         """The VTherm put the original preset back (or the boost was cancelled): not an override."""
         self._ignore_override(now, "boost", "boost_ended")
+        self._mark_settle("boost_end", now)
+        self.sched["boost_ended_at"] = now.isoformat()  # D63: a warm-by block close by takes over from the boost
         self._maybe_restore_boost_temp(now, force=True)
         if self.standdown.cause == STANDDOWN_TIMED_PRESET:
             self.standdown.clear()
@@ -399,6 +431,9 @@ class LearningMixin:
 
     def _record_boost(self, now: datetime, original: str | None, wanted: float | None = None) -> None:
         """What a boost says depends on when it happened (D60) and, when a temperature was asked for, how far (D61)."""
+        if settling := self._settling(now):
+            self._ignore_override(now, "boost", settling)
+            return
         affected = tuple(self.affected_presets)
         target = self.vtherm.preset_temp(original) if original else None
         direction, magnitude, raw = 1, float(self.const("boost_signal_c")), None
@@ -426,10 +461,15 @@ class LearningMixin:
         current = self.snapshot.current_temp
         margin = float(self.const("boost_below_target_margin"))
         below = direction > 0 and target is not None and current is not None and current < target - margin
+        warm_by_passed = ctx.minutes_since_warm_by is not None and ctx.minutes_since_warm_by >= 0
         if skip_recent:
             bucket, weight = BUCKET_SKIP, 2.0
-        elif below:
-            bucket, weight = BUCKET_PREHEAT, 1.0  # still warming up: the warm-up was late, comfort itself may be fine
+        elif below and self.preheat_latched:
+            # Still before the warm-by time: the warm-up is not late yet, so it says nothing about preheat (D64)
+            self._ignore_override(now, "boost", "before_warm_by")
+            return
+        elif below and warm_by_passed:
+            bucket, weight = BUCKET_PREHEAT, 1.0  # still warming up after warm-by: the warm-up was late, comfort may be fine
         else:
             bucket, weight = attribute(
                 ctx,

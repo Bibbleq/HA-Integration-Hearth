@@ -16,7 +16,7 @@ Four mechanisms, delivered as four phases, each behind its own switch:
 
 | Phase | Mechanism | Default |
 |---|---|---|
-| 1 | **Adaptive comfort offset**: the comfort target drifts with a running mean of outdoor temperature (EN 16798 / ASHRAE 55 acclimatisation) | on |
+| 1 | **Adaptive comfort offset**: the comfort target follows a running mean of outdoor temperature (EN 16798 running mean), warmer inside when it has been colder outside (D65) | on |
 | 2 | **Forecast skip** and **setback depth**: skip the morning heat when the day will do it for free; shallower overnight setback before very cold mornings | off |
 | 3 | **Warm-by schedule** with **learned preheat**: blocks say when a room should *be* warm; Hearth learns how fast each room warms and starts early enough | off |
 | 4 | **Override learning**: manual changes are recorded in a correction ledger (record-only; application is a separate flag, off) | off |
@@ -67,7 +67,7 @@ Then *Settings > Devices & services > Add integration > Hearth*. One Hearth room
 | `switch.hearth_<room>_preheat` | off | Phase 3: warm-by blocks start early (needs schedule on) |
 | `switch.hearth_<room>_override_learning` | off | Phase 4: record overrides in the ledger |
 | `switch.hearth_<room>_apply_learned_corrections` | off | Phase 4: apply bounded corrections from the ledger |
-| `number.hearth_<room>_adaptive_slope` | 0.15 | C of comfort per C of running mean above/below 10 C |
+| `number.hearth_<room>_adaptive_slope` | 0.15 | C of comfort added per C the running mean is below 10 C (taken off per C above it, D65) |
 | `number.hearth_<room>_skip_threshold` | 18 C | Forecast high at or above which the morning heat is skipped |
 | `number.hearth_<room>_max_offset` | 1.5 C | Cap on the total adaptive offset |
 | `number.hearth_<room>_min_indoor_floor` | 16 C | Below this, no skip starts and any active skip aborts |
@@ -110,7 +110,7 @@ Each room is a device named *Hearth \<Room\>*. Diagnostics (read-only):
 | `sensor.hearth_<room>_skip_preview` | Today until the decision time, then tomorrow: likely / unlikely / unknown, with the forecast basis |
 | `sensor.hearth_<room>_setback_status` | idle / active, with the coldest-morning forecast, eco base and target, restore time |
 | `sensor.hearth_<room>_warming_rate` | C/h at the current outdoor temperature, with model constants and run count |
-| `sensor.hearth_<room>_next_block` | Phase 3: "comfort by 06:30, preheat est. 05:52". Attributes include `schedule_source` (`scheduler` / `explicit` / `none`), `source_entities`, `source_blocked_reason` and `derived_at` |
+| `sensor.hearth_<room>_next_block` | Phase 3: "comfort by 06:30, preheat est. 05:52", then "comfort by 06:30, preheating since 05:52" once preheat has started (D62; attribute `preheat_running`). Attributes include `schedule_source` (`scheduler` / `explicit` / `none`), `source_entities`, `source_blocked_reason` and `derived_at` |
 | `sensor.hearth_<room>_stand_down` | none / until (local timestamp), with cause and the last external change |
 | `sensor.hearth_<room>_learning_<bucket>` | Phase 4: decayed mean bias in C per bucket (`preheat_shortfall`, `slope_error`, `skip_failure`, `baseline_error`) with evidence count and the correction that would apply |
 | `binary_sensor.hearth_<room>_dormant` | On when Hearth is leaving the room alone, with reason (away / central_frost / window / safety / overpowering / off / unavailable / disabled / paused / no_preset_entities). Observe-only is not a dormant reason; the sensor, the comfort-target sensor and the next-block sensor carry an `observe_only` attribute |
