@@ -210,6 +210,8 @@ def _next_block_state(room: HearthRoom) -> str | None:
     plan = room.preheat_plan
     if nxt.block.warm_by and room.wants("preheat") and plan is not None and plan.block.key == nxt.key and plan.lead_min > 0:
         est = dt_util.as_local(plan.start).strftime("%H:%M")
+        if plan.latched:
+            return f"{nxt.preset} by {when}, preheating since {est}"
         return f"{nxt.preset} by {when}, preheat est. {est}"
     if nxt.block.warm_by:
         return f"{nxt.preset} by {when}"
@@ -234,6 +236,8 @@ def _next_block_attrs(room: HearthRoom) -> dict[str, Any]:
         "next_block_warm_by": nxt.block.warm_by if nxt else None,
         "next_block_skippable": nxt.block.skippable if nxt else None,
         "preheat_start": plan.start.isoformat() if plan else None,
+        "preheat_running": room.preheat_latched,
+        "preheat_changed_at": room.sched.get("preheat_changed_at"),  # last preheat start or end (D64, knob-boost automation)
         "preheat_lead_min": round(plan.lead_min, 1) if plan else None,
         "preheat_target": plan.target if plan else None,
         "preheat_deficit": round(plan.deficit, 2) if plan else None,

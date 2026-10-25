@@ -6,7 +6,7 @@ Python 3.14, hassfest, and HACS validation.
 
 | Check | State |
 |---|---|
-| pytest (467 tests at 0.7.3: 250 pure-core, 217 HA-level) | green on CI |
+| pytest (480 tests at 0.7.4: 252 pure-core, 228 HA-level) | green on CI |
 | hassfest | green |
 | HACS validation | strict since the repo went public (see D18) |
 
@@ -99,6 +99,27 @@ real Versatile Thermostat or a real weather integration:
    `custom_components/hearth` manually.
 
 ## Changes after the first build
+
+- **0.7.4**: four faults from the house on the weekend of 2026-10-24/25.
+  - Preheat holds once started (D62). The plan's start moved later as the room warmed, so preheat fell back to eco and
+    came back on (Living Room on 24 Oct: on 05:00, eco 05:13, on 05:51, eco 05:59, on 06:04, eco 06:17, on 06:18,
+    eco 06:32, on 06:39; Main Bedroom on 25 Oct in eco 05:24-06:32). The flaps also discarded every warm-up as
+    `block_ended`, which is why the live rooms had 0-2 learnt runs and the observing rooms 3-4. Latched, the warm-up is
+    one run. The next-block sensor shows "preheating since HH:MM" instead of an estimate.
+  - A boost ending close to a warm-by block hands over to it (D63): within `boost_end_bridge_min` (45) of the block the
+    room goes to the block's preset, and a preheat running when the boost started carries on (Main Bedroom on 24 Oct:
+    boost ended 06:28, eco until 07:00).
+  - Settle window (D64): no ledger entry or boost pattern within `learning_settle_min` (10) of Hearth's own writes, a
+    wake from dormancy, a preheat start or end, or a boost end; a boost still short of target is a preheat shortfall
+    only once the warm-by time has passed. Both of the weekend's ledger entries were the house settling (Main Bedroom
+    05:28 +2.0 preheat_shortfall, Living Room 13:14 -0.5 baseline_error).
+  - Adaptive comfort sign (D65): offset = slope x (t_ref - t_rm), so a cold running mean raises comfort. At t_rm 7.5
+    the target is 20.875, written as 21.0 (it was 20.0); at t_rm 0 it is capped at base +1.5 within the band.
+  Verify after installing:
+  1. Next morning, history of each live room's VTherm: one switch to comfort per warm-by block, no eco in between;
+     `sensor.hearth_<room>_warming_rate` `evidence_count` up by one per clean warm-up.
+  2. `sensor.hearth_<room>_comfort_target` attributes: `offset_requested` positive while `t_rm` is below 10.
+  3. During a preheat: `sensor.hearth_<room>_next_block` reads "... preheating since HH:MM" and the time does not move.
 
 - **0.7.3**: three gaps found on the Living Room on 2026-10-23. Schedule blocks are applied while the room is dormant
   for an open window (D57); a VTherm moving its target back to its preset's own temperature is not an override (D58);

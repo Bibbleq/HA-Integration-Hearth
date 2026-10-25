@@ -205,8 +205,8 @@ class RunningMeanTracker:
 class ComfortResult:
     """Result of an adaptive comfort computation."""
 
-    raw_target: float  # T_base + slope * (T_rm - T_ref), unclamped
-    offset_requested: float  # slope * (T_rm - T_ref)
+    raw_target: float  # T_base + slope * (T_ref - T_rm), unclamped
+    offset_requested: float  # slope * (T_ref - T_rm): positive when it is colder than T_ref
     offset_applied: float  # after max_offset cap and band clamp
     target: float  # clamped, pre-quantise
     quantised: float  # the value to write
@@ -227,16 +227,17 @@ def comfort_target(
 ) -> ComfortResult:
     """Compute the adaptive comfort target (spec 4.1).
 
-    T_comfort = clamp(T_base + slope * (T_rm - T_ref), band_min, band_max), with the
+    T_comfort = clamp(T_base + slope * (T_ref - T_rm), band_min, band_max), with the
     total applied offset additionally capped at +/- max_offset and the result
-    quantised to `step` within the band. `extra_offset` is a learned correction
+    quantised to `step` within the band. Colder outside means warmer inside (D65): a
+    running mean below T_ref raises comfort, one above it lowers comfort. `extra_offset` is a learned correction
     (phase 4); it is included in the offset cap and the band clamp, so no path
     can escape the clamps.
     """
     if hold or t_rm is None:
         requested = 0.0
     else:
-        requested = slope * (t_rm - t_ref)
+        requested = slope * (t_ref - t_rm)
     total = requested + extra_offset
     capped = clamp(total, -abs(max_offset), abs(max_offset))
     raw = t_base + total

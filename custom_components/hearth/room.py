@@ -489,6 +489,8 @@ class HearthRoom(SchedulerSourceMixin, TransferMixin, LearningMixin, ScheduleMix
         reason = self._compute_dormant()
         if self.dormant_reason == DORMANT_PAUSED and reason != DORMANT_PAUSED:
             self._resume_pending = True  # D46: leaving the pause is a fresh start, handled in _handle_resume
+        if (reason is None) != (self.dormant_reason is None):
+            self._mark_settle("dormant", dt_util.utcnow())  # D64: the room is about to be written to or let go
         self.dormant_reason = reason
 
     def _compute_dormant(self) -> str | None:

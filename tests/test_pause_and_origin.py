@@ -74,7 +74,7 @@ async def test_paused_room_writes_nothing(hass: HomeAssistant, hass_storage, ser
 async def test_changes_while_paused_are_ignored_as_dormant(hass: HomeAssistant, hass_storage, services, freezer) -> None:
     today = dt_util.start_of_local_day()
     await tick(hass, freezer, local(today, 15, 0))
-    seed_store(hass_storage, t_rm=14.0, settings=LEARN)
+    seed_store(hass_storage, t_rm=7.5, settings=LEARN)
     human(hass, preset="comfort", current=19.0, target=20.5)
     set_numbers(hass)
     room = await setup_room(hass, make_entry())
@@ -245,7 +245,7 @@ async def test_leaving_other_dormancy_still_lets_a_manual_change_stand(hass: Hom
 async def test_a_persons_change_stands_down_and_is_learnt(hass: HomeAssistant, hass_storage, services, freezer) -> None:
     today = dt_util.start_of_local_day()
     await tick(hass, freezer, local(today, 15, 0))
-    seed_store(hass_storage, t_rm=14.0, settings=LEARN, extra={"last_written": {"comfort": 21.0}})
+    seed_store(hass_storage, t_rm=7.5, settings=LEARN, extra={"last_written": {"comfort": 21.0}})
     human(hass, preset="comfort", current=19.0, target=21.0)
     set_numbers(hass, comfort=21.0)
     room = await setup_room(hass, make_entry())
@@ -260,7 +260,7 @@ async def test_a_persons_change_stands_down_and_is_learnt(hass: HomeAssistant, h
 async def test_an_automations_change_stands_down_but_is_not_learnt(hass: HomeAssistant, hass_storage, services, freezer) -> None:
     today = dt_util.start_of_local_day()
     await tick(hass, freezer, local(today, 15, 0))
-    seed_store(hass_storage, t_rm=14.0, settings=LEARN, extra={"last_written": {"comfort": 21.0}})
+    seed_store(hass_storage, t_rm=7.5, settings=LEARN, extra={"last_written": {"comfort": 21.0}})
     automation(hass, preset="comfort", current=19.0, target=21.0)
     set_numbers(hass, comfort=21.0)
     room = await setup_room(hass, make_entry())
@@ -282,7 +282,7 @@ async def test_an_automations_change_stands_down_but_is_not_learnt(hass: HomeAss
 async def test_an_automations_temperature_change_is_not_learnt_either(hass: HomeAssistant, hass_storage, services, freezer) -> None:
     today = dt_util.start_of_local_day()
     await tick(hass, freezer, local(today, 15, 0))
-    seed_store(hass_storage, t_rm=14.0, settings=LEARN, extra={"last_written": {"comfort": 21.0}})
+    seed_store(hass_storage, t_rm=7.5, settings=LEARN, extra={"last_written": {"comfort": 21.0}})
     automation(hass, preset="comfort", current=19.0, target=21.0)
     set_numbers(hass, comfort=21.0)
     room = await setup_room(hass, make_entry())
@@ -295,7 +295,7 @@ async def test_an_automations_temperature_change_is_not_learnt_either(hass: Home
 async def test_learn_from_automations_restores_the_old_behaviour(hass: HomeAssistant, hass_storage, services, freezer) -> None:
     today = dt_util.start_of_local_day()
     await tick(hass, freezer, local(today, 15, 0))
-    seed_store(hass_storage, t_rm=14.0, settings=LEARN, extra={"last_written": {"comfort": 21.0}})
+    seed_store(hass_storage, t_rm=7.5, settings=LEARN, extra={"last_written": {"comfort": 21.0}})
     automation(hass, preset="comfort", current=19.0, target=21.0)
     set_numbers(hass, comfort=21.0)
     room = await setup_room(hass, make_entry())
@@ -309,7 +309,7 @@ async def test_learn_from_automations_restores_the_old_behaviour(hass: HomeAssis
 async def test_a_persons_number_edit_counts_as_a_person(hass: HomeAssistant, hass_storage, services, freezer) -> None:
     today = dt_util.start_of_local_day()
     await tick(hass, freezer, local(today, 15, 0))
-    seed_store(hass_storage, t_rm=14.0, settings=LEARN, extra={"last_written": {"comfort": 21.0}})
+    seed_store(hass_storage, t_rm=7.5, settings=LEARN, extra={"last_written": {"comfort": 21.0}})
     automation(hass, preset="comfort", current=19.0, target=21.0)
     set_numbers(hass, comfort=21.0)
     room = await setup_room(hass, make_entry())

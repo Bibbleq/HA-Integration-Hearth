@@ -687,3 +687,57 @@ the valve-reading-minus-room-reading gap) so the boost runs on the room sensor, 
 Dashboard boosts can keep calling `versatile_thermostat.set_timed_preset` directly: D60 recognises them, and the
 person's user on the call is enough.
 
+## D62. Preheat holds once it has started
+
+The preheat plan is recomputed on every evaluation from the room's current temperature. As the room warms the deficit
+shrinks, the lead shrinks and the planned start moves past "now", and up to 0.7.3 that sent the room back to the
+current block (eco) until the start caught up again: Living Room on 24 Oct switched on and off five times between 05:00
+and 06:39, and every fall back to eco discarded the warm-up as `block_ended`, so the live rooms learnt almost nothing.
+
+A preheat that has started is latched in the schedule state (`preheat`: block key, block start, started at, start
+temperature, target) and holds the warm-by block's preset until that block starts. It ends early only when the
+schedule no longer has that block, when preheat or the schedule is switched off (or observe is on), when the room goes
+dormant for anything but an open window (D57), when Hearth stands down for anything but a timed boost, or when a
+forecast skip takes over. Reaching the target early is not an exit: the VTherm idles at target on comfort, while
+dropping back to eco would only start another warm-up before the block (a second comfort write). A room already at
+target never starts a preheat (no deficit, no lead). The latch is persisted, so a restart mid-preheat carries on.
+While latched the plan's `start` is the latch's start (`latched: true`), and the next-block sensor says "preheating
+since HH:MM".
+
+## D63. A boost ending close to a warm-by block hands over to it
+
+A timed boost keeps the preheat latch (the stand-down it starts is `timed_preset`), so a boost in the middle of a
+warm-up ends back in that warm-up. A boost that ends with no preheat running, within `boost_end_bridge_min` (45) of a
+warm-by block, starts the block's preset straight away (latch reason `boost_ended`), even when the boost left the room
+warm enough that a fresh plan has nothing to preheat for. Further from a block the room goes back to its current
+block, as before. Main Bedroom on 24 Oct: the boost ended 06:28 and the room sat in eco until the 07:00 comfort block.
+
+## D64. Hearth does not learn while the house is settling
+
+For `learning_settle_min` (10) after Hearth writes a preset or a temperature, after the room wakes from (or goes into)
+dormancy, after a preheat starts or ends, and after a timed boost ends, the VTherm re-sends setpoints and the Tado
+valves catch up over HomeKit. A change seen then is too often the house settling rather than a person: both weekend
+ledger entries were (Main Bedroom 24 Oct 05:28, a "knob" turn to 25 C that was the valve reporting the high setpoint
+VTherm had just sent after preheat came back on, learnt as +2 C preheat_shortfall; Living Room 13:14, the valve not yet
+caught up eight minutes after waking from Away, learnt as -0.5 C baseline_error). Inside the window the stand-down
+still happens (Hearth keeps out of the way) but there is no ledger entry or boost pattern; the ignored list says
+`settling_<what>`. Hearth's own writes for `hearth.boost` (reason `boost`, `boost_restore`) do not count, or no boost
+could be learnt. The Tado knob-boost automation applies the same rule before it calls `hearth.boost`.
+
+A boost still short of target is a late warm-up (`preheat_shortfall`) only once the warm-by time has passed; during a
+running preheat it says nothing yet and is ignored (`before_warm_by`).
+
+## D65. Adaptive comfort: colder outside means warmer inside
+
+Up to 0.7.3 the offset was slope x (t_rm - t_ref), the EN 16798 adaptive-comfort direction for free-running
+buildings: a cold spell lowered comfort (t_rm 7.5 gave 20.0 C against a 20.5 C base). In a heated house the
+opposite is wanted: colder outside, colder walls and windows, so the same air temperature feels cooler. The offset is
+now slope x (t_ref - t_rm), still capped at +/- max_offset and clamped to band_min..band_max, then quantised: t_rm 7.5
+gives 20.875 C, written as 21.0 C; t_rm 0 gives +1.5 C, 22.0 C at the default band. The running mean itself is
+unchanged.
+
+The slope_error bucket still means what it did: overrides while the running mean is more than
+`slope_error_cold_margin` below t_ref, applied as an additive correction in cold weather only. It now corrects the
+residual on top of a warmer cold-weather comfort rather than the inverted slope; no room had slope_error evidence when
+the sign changed, so nothing learnt under the old sign carries over.
+

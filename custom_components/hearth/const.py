@@ -165,6 +165,8 @@ DEFAULTS: Final[dict[str, object]] = {
     "learn_max_run_min": 240,  # minutes: a warm-up still short of target after this is discarded
     "solar_gain_discount": 0.5,  # C: preheat target reduction on sunny mornings for solar rooms
     "preheat_lookahead_hours": 12,  # only plan preheat for warm-by blocks within this horizon
+    "boost_end_bridge_min": 45,  # a timed boost ending this close to a warm-by block hands straight over to it (D63)
+    "boost_end_seen_min": 10,  # how long a boost end stays fresh for that hand-over
     # 4.6 override handling and learning
     "standdown_timeout_min": 180,
     "write_match_window_s": 180,  # seconds within which an observed change matches one of our writes
@@ -175,6 +177,8 @@ DEFAULTS: Final[dict[str, object]] = {
     "learning_target_bound": 1.0,  # C
     "learning_safety_factor_bound_pct": 25.0,
     "slope_error_cold_margin": 3.0,  # C below t_ref that counts as "cold" for slope attribution
+    "learning_settle_min": 10,  # minutes after Hearth's own writes, a wake from dormancy, a preheat start or end or a
+    # boost end during which a change is not learnt from (D64): valves and the VTherm are still catching up
     "write_log_len": 100,
     "learn_from_automations": False,  # True: changes made by automations/scripts/Scheduler are learnt from like manual ones (D47)
     # 4.7 forecast subsystem
