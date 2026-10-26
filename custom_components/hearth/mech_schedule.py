@@ -12,7 +12,16 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_SCHEDULE, CONF_SOLAR_GAIN, CONF_WORKDAY, DORMANT_WINDOW, PRESET_ECO, SWITCH_PREHEAT, SWITCH_SCHEDULE
+from .const import (
+    CONF_SCHEDULE,
+    CONF_SOLAR_GAIN,
+    CONF_WORKDAY,
+    DORMANT_TRANSIENT,
+    DORMANT_WINDOW,
+    PRESET_ECO,
+    SWITCH_PREHEAT,
+    SWITCH_SCHEDULE,
+)
 from .core.forecast import SUNNY_CONDITIONS
 from .core.preheat import HeatingRun, WarmingModel, lead_minutes, preheat_start, warming_rate
 from .core.schedule import BlockInstance, Schedule, ScheduleError
@@ -132,6 +141,7 @@ class ScheduleMixin:
             default_rate=float(self.const("default_rate")),
             rate_min=float(self.const("rate_min")),
             rate_max=float(self.const("rate_max")),
+            early_min_runs=int(self.const("early_rate_min_runs")),
         )
         safety = float(self.const("safety_factor")) * self.learned_safety_factor_multiplier()
         lead = lead_minutes(deficit, rate, safety_factor=safety, max_preheat_min=float(self.const("max_preheat_min")))
@@ -217,14 +227,20 @@ class ScheduleMixin:
         afresh each time fell back to the current block within minutes and came back on later (Living Room on
         24 Oct: on at 05:00, 05:51, 06:04, 06:18 and 06:39, back to eco in between). Latched, it ends only at the
         block start, when the schedule no longer has that block, or when Hearth has to let go of the room: preheat or
-        the schedule switched off, dormant other than an open window (D57), a stand-down other than a timed boost, a
-        forecast skip. A room that reaches its target early stays on the block's preset (the VTherm idles at target);
+        the schedule switched off, dormant other than an open window (D57) or the VTherm blinking (D66), a stand-down
+        other than a timed boost, a forecast skip. A room that reaches its target early stays on the block's preset
+        (the VTherm idles at target);
         dropping back would only start the warm-up again. A timed boost keeps the latch, so the warm-up carries on
         when the boost ends (D63). Returns the block to drive while latched, else None.
         """
         plan = self.preheat_plan
         can_act = self.enabled(SWITCH_SCHEDULE) and self.enabled(SWITCH_PREHEAT)
         blocked = self.dormant and self.dormant_reason != DORMANT_WINDOW
+        # D66: a VTherm that is unavailable or re-initialising is not the house letting go of the room. The latch
+        # holds (nothing is written while it lasts) so the warm-up carries on when the VTherm is back, with no eco
+        # write for its restore to fight (Main Bedroom 25 Oct 18:46: a VTherm reload mid-preheat ended the latch, Hearth
+        # wrote eco, VTherm put comfort back, and that read as an automation override until 20:15).
+        let_go = blocked and self.dormant_reason not in DORMANT_TRANSIENT
         held = self.standdown_active and self.standdown.cause != STANDDOWN_TIMED_PRESET
         if latch := self.sched.get("preheat"):
             block = self.schedule_model.next_warm_by(now, self.tz)
@@ -236,7 +252,7 @@ class ScheduleMixin:
                 end = "schedule_changed"
             elif not can_act:
                 end = "switched_off"
-            elif blocked:
+            elif let_go:
                 end = self.dormant_reason or "dormant"
             elif held:
                 end = "standdown"
@@ -370,6 +386,8 @@ class ScheduleMixin:
                 self.heating_run = HeatingRun(now, snap.target_temp, snap.current_temp, snap.current_temp, now)
                 self.heating_run.sample(now, snap.current_temp, self.outdoor_temperature())
             return
+        if self.dormant and self.dormant_reason in DORMANT_TRANSIENT:
+            return  # D66: the VTherm is reloading or unreachable; the run waits for it
         if self.dormant:
             run.taint(self.dormant_reason or "dormant")
         elif self.standdown_active:
@@ -410,6 +428,7 @@ class ScheduleMixin:
             default_rate=float(self.const("default_rate")),
             rate_min=float(self.const("rate_min")),
             rate_max=float(self.const("rate_max")),
+            early_min_runs=int(self.const("early_rate_min_runs")),
         )
 
     # ------------------------------------------------------------- services

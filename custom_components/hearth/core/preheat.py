@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from statistics import median
 
 
 @dataclass
@@ -78,17 +79,25 @@ def warming_rate(
     default_rate: float = 1.0,
     rate_min: float = 0.3,
     rate_max: float = 3.0,
+    early_min_runs: int = 2,
 ) -> tuple[float, bool]:
     """Warming rate in C/h at the given target and outdoor temperature.
 
-    Returns (rate, learned). Until `min_runs` clean runs exist, or when the
-    model or outdoor temperature is missing, the conservative default applies.
+    Returns (rate, learned). With `min_runs` or more clean runs and an outdoor
+    temperature the delta-aware fit applies. Below that, from `early_min_runs`
+    runs the median of the observed rates applies, flat (D68): a two-parameter
+    fit on two to four points is unstable, but the rates themselves are real
+    evidence, and the default hid them for days. Fewer runs than that, or no
+    model, fall back to the conservative default.
     """
-    if model.a is None or model.n_runs < min_runs or t_out is None:
-        return max(rate_min, min(rate_max, default_rate)), False
-    b = model.b or 0.0
-    rate = model.a - b * (t_target - t_out)
-    return max(rate_min, min(rate_max, rate)), True
+    if model.n_runs >= min_runs and model.a is not None and t_out is not None:
+        b = model.b or 0.0
+        rate = model.a - b * (t_target - t_out)
+        return max(rate_min, min(rate_max, rate)), True
+    if model.n_runs >= early_min_runs:
+        rate = median(r for _, r in model.runs)
+        return max(rate_min, min(rate_max, rate)), True
+    return max(rate_min, min(rate_max, default_rate)), False
 
 
 def lead_minutes(

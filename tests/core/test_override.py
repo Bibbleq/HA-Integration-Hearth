@@ -209,3 +209,31 @@ def test_ledger_add_reset_roundtrip():
 def test_ledger_entry_roundtrip():
     e = entry(BUCKET_SLOPE, -1, 1.0)
     assert LedgerEntry.from_dict(e.to_dict()) == e
+
+
+def test_ledger_amend_last_keeps_bucket_stats_exact():
+    """D67: amending the newest entry leaves the bucket exactly as if the entry had been added that way."""
+    old_at = T0 - timedelta(days=21)  # one half-life before T0, so decay is in play
+    ledger = Ledger()
+    ledger.add(entry(BUCKET_BASELINE, 1, 0.5, at=old_at), HL)
+    ledger.add(entry(BUCKET_BASELINE, -1, 0.1, at=T0), HL)  # the first step of a slider drag
+    removed = ledger.amend_last(entry(BUCKET_BASELINE, -1, 2.0, at=T0), HL)  # the whole drag
+    assert removed.magnitude == 0.1
+    direct = Ledger()
+    direct.add(entry(BUCKET_BASELINE, 1, 0.5, at=old_at), HL)
+    direct.add(entry(BUCKET_BASELINE, -1, 2.0, at=T0), HL)
+    got, want = ledger.buckets[BUCKET_BASELINE], direct.buckets[BUCKET_BASELINE]
+    assert (got.mean, got.weight, got.pos, got.neg, got.events, got.last_at) == pytest.approx(
+        (want.mean, want.weight, want.pos, want.neg, want.events, want.last_at)
+    )
+    assert ledger.entries[-1].magnitude == 2.0 and ledger.last_entry_at() == T0
+    # The net change flips direction and lands in another bucket: the first bucket forgets the event, the other learns it
+    ledger.amend_last(entry(BUCKET_PREHEAT, 1, 2.0, at=T0), HL)
+    base = ledger.buckets[BUCKET_BASELINE]
+    assert (base.mean, base.weight, base.neg, base.events) == pytest.approx((0.5, 0.5, 0.0, 1))
+    pre = ledger.buckets[BUCKET_PREHEAT]
+    assert (pre.mean, pre.weight, pre.pos, pre.events) == pytest.approx((2.0, 1.0, 1.0, 1))
+    # Back where it started: the entry goes away
+    ledger.amend_last(None, HL)
+    assert len(ledger.entries) == 1 and ledger.buckets[BUCKET_PREHEAT].events == 0 and ledger.buckets[BUCKET_PREHEAT].weight == 0.0
+    assert Ledger().amend_last(None, HL) is None

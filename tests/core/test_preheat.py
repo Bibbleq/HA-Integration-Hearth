@@ -1,5 +1,6 @@
 """Tests for core.preheat (spec 4.4)."""
 
+import statistics
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -42,17 +43,33 @@ def test_model_add_run_refits_and_bounds():
     assert m.n_runs == 0 and m.a is None
 
 
-def test_warming_rate_cold_start_uses_default():
+def test_warming_rate_cold_start_uses_default_then_the_median_then_the_fit():
+    """D68: no evidence -> default; one run -> still the default (a single run can be a radiator reading); two to
+    four runs -> the median of the observed rates, flat; five -> the delta-aware fit."""
     m = WarmingModel()
-    rate, learned = warming_rate(m, 20.0, 5.0)
-    assert rate == 1.0 and not learned
+    assert warming_rate(m, 20.0, 5.0) == (1.0, False)
+    m.add_run(12.0, 7.0)  # the Living Room's first-ever run, read off the radiator
+    assert warming_rate(m, 20.0, 5.0, min_runs=5) == (1.0, False)
+    m.reset()
     for d in (5.0, 10.0, 15.0, 20.0):
         m.add_run(d, 2.0 - 0.05 * d)
-    rate, learned = warming_rate(m, 20.0, 5.0, min_runs=5)
-    assert rate == 1.0 and not learned  # only 4 runs
+        if m.n_runs >= 2:
+            rate, learned = warming_rate(m, 20.0, 5.0, min_runs=5)
+            assert learned and rate == pytest.approx(statistics.median(r for _, r in m.runs))
+    assert warming_rate(m, 20.0, 5.0, min_runs=5) == (pytest.approx(1.375), True)  # median of 1.75, 1.5, 1.25, 1.0
     m.add_run(25.0, 2.0 - 0.05 * 25.0)
     rate, learned = warming_rate(m, 20.0, 5.0, min_runs=5)
     assert learned and rate == pytest.approx(2.0 - 0.05 * 15.0)
+
+
+def test_warming_rate_early_median_ignores_one_wild_run():
+    """The median, not the mean: the Main Bedroom's 0.77 and 2.58 C/h runs must not average into a number neither saw."""
+    m = WarmingModel()
+    for d, r in ((12.0, 1.55), (12.4, 1.09), (12.2, 0.77), (12.05, 2.58)):
+        m.add_run(d, r)
+    rate, learned = warming_rate(m, 20.0, 8.0, min_runs=5)
+    assert learned and rate == pytest.approx((1.09 + 1.55) / 2)
+    assert warming_rate(m, 20.0, 8.0, min_runs=5, early_min_runs=5) == (1.0, False)  # the gate is a constant
 
 
 def test_warming_rate_clamped_and_needs_outdoor():
@@ -60,7 +77,8 @@ def test_warming_rate_clamped_and_needs_outdoor():
     assert warming_rate(m, 20.0, 5.0)[0] == 3.0
     m = WarmingModel(a=0.1, b=0.0, runs=[(1.0, 0.1)] * 5)
     assert warming_rate(m, 20.0, 5.0)[0] == 0.3
-    assert warming_rate(m, 20.0, None) == (1.0, False)
+    assert warming_rate(m, 20.0, None) == (0.3, True)  # no outdoor reading: the median of the runs still counts (D68)
+    assert warming_rate(WarmingModel(), 20.0, None) == (1.0, False)
 
 
 def test_lead_minutes():

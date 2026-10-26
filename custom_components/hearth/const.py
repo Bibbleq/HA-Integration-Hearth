@@ -157,7 +157,8 @@ DEFAULTS: Final[dict[str, object]] = {
     "rate_min": 0.3,  # C/h
     "rate_max": 3.0,  # C/h
     "default_rate": 1.0,  # C/h until enough clean runs exist
-    "min_learning_runs": 5,
+    "min_learning_runs": 5,  # runs before the delta-aware fit is trusted
+    "early_rate_min_runs": 2,  # runs before the median of observed rates replaces the default (D68)
     "max_learning_runs": 30,
     "learn_min_run_min": 20,  # minutes: shortest heating run the learner accepts
     "learn_min_rise": 0.3,  # C: smallest temperature rise the learner accepts
@@ -171,6 +172,7 @@ DEFAULTS: Final[dict[str, object]] = {
     "standdown_timeout_min": 180,
     "write_match_window_s": 180,  # seconds within which an observed change matches one of our writes
     "override_storm_window_min": 180,  # a second override within this window is ignored
+    "override_coalesce_s": 15,  # seconds within which a person's stepped target changes are one override (D67)
     "preheat_shortfall_window_min": 60,
     "learning_half_life_days": 21,
     "learning_min_events": 3,
@@ -201,6 +203,7 @@ DEFAULTS: Final[dict[str, object]] = {
     "boost_pattern_window_days": 28,
     "boost_pattern_min_events": 3,  # boosts in the same hour on the same kind of day before a schedule hint
     "startup_grace_s": 180,  # seconds after HA finishes starting during which a VTherm change is a restore, not an override (D55)
+    "reload_grace_s": 60,  # seconds after a VTherm comes back from unavailable/not ready during which its changes are restores (D66)
     "source_reenable_grace_s": 15,  # seconds after a source turns on during which a preset change is the Scheduler's, not a person's (D48)
 }
 
@@ -209,6 +212,7 @@ VT_ATTR_PRESET: Final = "preset_mode"
 VT_ATTR_CURRENT_TEMP: Final = "current_temperature"
 VT_ATTR_TARGET_TEMP: Final = "temperature"
 VT_ATTR_HVAC_ACTION: Final = "hvac_action"
+VT_ATTR_READY: Final = "is_ready"
 VT_SPECIFIC_STATES: Final = "specific_states"
 VT_ATTR_EXT_TEMP: Final = "ext_current_temperature"
 VT_ATTR_SLOPE: Final = "temperature_slope"
@@ -235,6 +239,9 @@ DORMANT_UNAVAILABLE: Final = "unavailable"
 DORMANT_DISABLED: Final = "disabled"
 DORMANT_NO_PRESET_ENTITIES: Final = "no_preset_entities"
 DORMANT_PAUSED: Final = "paused"  # switch.hearth_paused: every room dormant, Scheduler sources stay off (D45)
+# Dormancy that is the VTherm blinking (a reload, a dropped connection), not the house changing its mind: a running
+# preheat and a heating run hold through it (D66)
+DORMANT_TRANSIENT: Final = (DORMANT_UNAVAILABLE,)
 
 SKIP_IDLE: Final = "idle"
 SKIP_PREVIEW: Final = "preview"

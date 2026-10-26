@@ -6,7 +6,7 @@ Python 3.14, hassfest, and HACS validation.
 
 | Check | State |
 |---|---|
-| pytest (480 tests at 0.7.4: 252 pure-core, 228 HA-level) | green on CI |
+| pytest (494 tests at 0.7.5: 254 pure-core, 240 HA-level) | green on CI |
 | hassfest | green |
 | HACS validation | strict since the repo went public (see D18) |
 
@@ -30,7 +30,7 @@ target, restored at 09:00 unless edited.
 entry, `hearth.set_schedule` with validation, block application once per instance with exact one-shot
 timers, manual changes standing until the next block, restart never re-firing. Preheat plan per tick from
 the learned warming rate (own computation from `current_temperature` during clean heating runs, least-squares
-fit of `a - b * (T_target - T_out)`, clamped, conservative 1.0 C/h until five runs), safety factor, max
+fit of `a - b * (T_target - T_out)`, clamped; 1.0 C/h below two runs, the median of the runs until five, D68), safety factor, max
 preheat cap, solar discount, early preset switch. Skip and schedule interplay (skippable blocks deferred,
 non-skippable block ends a skip, restore to the schedule's preset).
 
@@ -99,6 +99,32 @@ real Versatile Thermostat or a real weather integration:
    `custom_components/hearth` manually.
 
 ## Changes after the first build
+
+- **0.7.5**: three faults from the night of 2026-10-25/26, the first morning on 0.7.4 (which otherwise held: one comfort
+  write per preheat, no eco flaps, one warming run learnt per live room).
+  - A VTherm reload mid-preheat (D66): `unavailable` and `is_ready: false` are transient dormancy. The preheat latch and
+    a heating run hold through them, and for `reload_grace_s` (60) after the VTherm is back its user-less changes are
+    restores (`startup`), not overrides. Main Bedroom 25 Oct 18:46: the central-config change reloaded every VTherm,
+    Hearth wrote eco on the restore, VTherm put comfort back, stand-down until 20:15.
+  - A person's stepped change is one override (D67): target changes by a person within `override_coalesce_s` (15) of
+    each other fold into one ledger entry carrying the net change, one stand-down and one summary log line. Office 26 Oct
+    09:22: a 21 -> 19 slider drag was learnt as -0.1 and restarted the stand-down 21 times. Dragging back onto the
+    preset's own temperature is no longer mistaken for a VTherm reapply (D58 needs no user on the change).
+  - The warming rate uses the evidence it has (D68): from two clean runs the median of the observed rates drives the
+    preheat lead; the delta-aware fit still waits for five. `sensor.hearth_<room>_warming_rate` gains `basis`
+    (`fit` / `median` / `default`) and `early_min_runs`. All three live rooms preheated on the 120-minute cap that
+    morning with two to four runs of 1.2 to 2.6 C/h in hand.
+  Verify after installing:
+  1. `sensor.hearth_<room>_warming_rate` on the live rooms: state = the median of `recent_runs`, `basis: median`,
+     `learned: true`; `sensor.hearth_<room>_next_block` estimates earlier than the 120-minute lead. Next morning each
+     room reaches comfort closer to its warm-by time.
+  2. Reload a live VTherm (or change the VT central configuration) during a preheat: the next-block sensor keeps
+     "preheating since HH:MM", `sensor.hearth_<room>_stand_down` stays `none`, the VTherm's history shows no eco write,
+     `recent_ignored_overrides` gains `startup` entries, and `warming_rate` `run_in_progress` stays true.
+  3. Drag a live room's target down by a degree or more on the thermostat card: one `Standing down` line and one
+     `Override recorded` line in the log, then `Override settled: temp -N.N C -> <bucket> (k steps over s s)` about
+     15 s after the last step; the learning sensor for that bucket moves by the whole change; `stand_down`
+     `last_override.steps` = k.
 
 - **0.7.4**: four faults from the house on the weekend of 2026-10-24/25.
   - Preheat holds once started (D62). The plan's start moved later as the room warmed, so preheat fell back to eco and

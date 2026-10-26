@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import copy
 import logging
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
+from homeassistant.core import CALLBACK_TYPE, callback
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
 from .const import PRESET_BOOST, PRESET_NONE, RESET_WARMING_RATE, SWITCH_APPLY_LEARNING, SWITCH_LEARNING
@@ -64,6 +67,9 @@ class LearningMixin:
         self.standdown = StandDown()
         self.ledger = Ledger()
         self._settle_marks: dict[str, datetime] = {}
+        self._coalesce: dict[str, Any] | None = None  # D67: a person's stepped change being folded into one override
+        self._coalesce_timer: CALLBACK_TYPE | None = None
+        self._reload_grace_until: datetime | None = None  # D66: the VTherm just came back; its changes are restores
 
     @property
     def learning(self) -> dict[str, Any]:
@@ -149,6 +155,10 @@ class LearningMixin:
         new_preset = new.attributes.get("preset_mode")
         old_target = _f(old.attributes.get("temperature"))
         new_target = _f(new.attributes.get("temperature"))
+        if self._not_ready(old) and not self._not_ready(new):
+            # D66: back from unavailable or initialising (a reload, a dropped connection). For a while its changes
+            # are its own restore, not anyone's decision (Main Bedroom 25 Oct 18:46: comfort put back 0.9 s after ready).
+            self._reload_grace_until = now + timedelta(seconds=float(self.const("reload_grace_s")))
         startup = self._is_startup_change(old, now)
         old_tm, new_tm = _timed(old), _timed(new)
         if not new_tm.get("is_active"):
@@ -176,13 +186,16 @@ class LearningMixin:
                 elif old_target is not None and new_target is not None:
                     magnitude = new_target - old_target
             change = {"kind": kind, "from": old_preset, "to": new_preset, "magnitude": magnitude, "at": now.isoformat()}
+            if kind == "setpoint":
+                change.update({"from_target": old_target, "to_target": new_target})
             self._record_external_change(now, kind, old_preset, new_preset, magnitude, change, self._change_origin(new), startup=startup)
             return
         if old_target is not None and new_target is not None and abs(new_target - old_target) > 0.01:
             # Same preset, target moved: a preset-temp number edit (ours, or someone's) or a manual setpoint.
-            if self._is_vtherm_reapply(new_preset, new_target, now, window):
+            if new.context.user_id is None and self._is_vtherm_reapply(new_preset, new_target, now, window):
                 # D58: the VTherm putting its own preset temperature back (window closed, options reload, our preset
-                # write landing) is not a person's or an automation's change.
+                # write landing) is not a person's or an automation's change. A person dragging the target back onto
+                # the preset's own temperature carries their context and is theirs (D67).
                 self._ignore_override(now, "temp", "vtherm_reapply")
                 return
             number_entity = None
@@ -191,7 +204,15 @@ class LearningMixin:
                 if number_entity and self.write_log.made_by_us(number_entity, new_target, now, window):
                     return
             magnitude = new_target - old_target
-            change = {"kind": "temp", "from": old_target, "to": new_target, "magnitude": magnitude, "at": now.isoformat()}
+            change = {
+                "kind": "temp",
+                "from": old_target,
+                "to": new_target,
+                "from_target": old_target,
+                "to_target": new_target,
+                "magnitude": magnitude,
+                "at": now.isoformat(),
+            }
             self._record_external_change(
                 now, "temp", new_preset, new_preset, magnitude, change, self._change_origin(new, number_entity), startup=startup
             )
@@ -211,13 +232,20 @@ class LearningMixin:
         state = self.hass.states.get(number_entity) if number_entity else None
         return state is None or now - state.last_changed > window
 
+    @staticmethod
+    def _not_ready(state) -> bool:
+        return state is None or state.state in ("unavailable", "unknown") or state.attributes.get("is_ready") is False
+
     def _is_startup_change(self, old, now: datetime) -> bool:
         """D55: a change out of a VTherm that was unavailable or still initialising is its restore, not an override;
-        so is any change in the grace window after Home Assistant finished starting."""
-        if old.state in ("unavailable", "unknown") or old.attributes.get("is_ready") is False:
+        so is any change in the grace window after Home Assistant finished starting, or (D66) within `reload_grace_s`
+        of the VTherm coming back."""
+        if self._not_ready(old):
             return True
         until = getattr(self, "_startup_grace_until", None)
-        return until is not None and now <= until
+        if until is not None and now <= until:
+            return True
+        return self._reload_grace_until is not None and now <= self._reload_grace_until
 
     def _record_external_change(
         self,
@@ -241,10 +269,120 @@ class LearningMixin:
             self._ignore_override(now, kind, "scheduler_source")
             self.request_reapply()
             return
+        if origin == ORIGIN_HUMAN and self._fold_stepped_change(now, change):
+            return
         self._capture_override_undo(now)
         self.last_external_change_at = now
         self.last_external_change = {**change, "origin": origin}
+        self._coalesce = None  # a change that was not folded starts afresh
+        if origin == ORIGIN_HUMAN and _f(change.get("from_target")) is not None:
+            self._coalesce = {
+                "kind": kind,
+                "from": _f(change["from_target"]),
+                "to": _f(change.get("to_target")),
+                "first_at": now,
+                "last_at": now,
+                "steps": 1,
+                "old_preset": old_preset,
+                "entry_at": None,  # set once the first step has made its ledger entry
+                "ctx": None,
+                "template": None,
+            }
+            self._arm_coalesce_timer()
         self._handle_override(now, kind, old_preset, new_preset, magnitude, origin)
+
+    # ------------------------------------------------------------- stepped changes (D67)
+
+    def _fold_stepped_change(self, now: datetime, change: dict[str, Any]) -> bool:
+        """A person's target change arriving in steps (a slider drag, repeated taps) is one override.
+
+        The Office on 26 Oct 09:22: 21 -> 19 in 0.1 C steps over six seconds. The first step was recorded as a -0.1 C
+        baseline_error, the other twenty were "storm" and each restarted the stand-down (21 log lines, 21 state writes).
+        Within `override_coalesce_s` of the previous step a further temp change is folded into the pending override:
+        the ledger entry (if the first step made one) is amended to the net change from the first step's starting
+        target, the stand-down is left alone, and one summary line is logged once the steps stop.
+        """
+        pending = self._coalesce
+        if pending is None or now - pending["last_at"] > timedelta(seconds=float(self.const("override_coalesce_s"))):
+            return False
+        to = _f(change.get("to_target"))
+        if to is None:
+            return False  # not a target change (a preset tap): judged on its own
+        pending.update({"last_at": now, "to": to, "steps": pending["steps"] + 1})
+        net = to - pending["from"]
+        self.last_external_change_at = now
+        self.last_external_change = {
+            "kind": pending["kind"],
+            "from": pending["from"],
+            "to": to,
+            "magnitude": net,
+            "at": now.isoformat(),
+            "origin": ORIGIN_HUMAN,
+            "steps": pending["steps"],
+        }
+        self._amend_coalesced_entry(pending, net)
+        self._arm_coalesce_timer()
+        return True
+
+    def _amend_coalesced_entry(self, pending: dict[str, Any], net: float) -> None:
+        """Rewrite the ledger entry the first step made so it carries the whole change.
+
+        A drag back to where it started removes the entry (nothing was said); a drag that then carries on past the
+        start puts one back. An entry something else made since (a boost) is left alone.
+        """
+        ctx, template, entry_at = pending.get("ctx"), pending.get("template"), pending.get("entry_at")
+        if ctx is None or template is None:
+            return  # the first step made no entry (settling, a storm...), so there is nothing to amend
+        present = entry_at is not None and bool(self.ledger.entries) and self.ledger.entries[-1].at == entry_at
+        if abs(net) < 0.01:
+            if present:
+                self.ledger.amend_last(None, self.half_life)
+                self.learning.pop("last_override", None)
+                pending["entry_at"] = None
+            return
+        direction = 1 if net > 0 else -1
+        bucket, weight = attribute(
+            ctx,
+            direction,
+            preheat_window_min=float(self.const("preheat_shortfall_window_min")),
+            skip_after_window_min=float(self.const("skip_ended_learning_window_min")),
+        )
+        capped = min(abs(net), 2 * float(self.const("learning_target_bound")))
+        entry = replace(template, direction=direction, magnitude=capped, bucket=bucket, weight=weight)
+        if present:
+            self.ledger.amend_last(entry, self.half_life)
+        elif entry_at is None:
+            self.ledger.add(entry, self.half_life)  # the bucket is already expressed as of entry.at: no decay
+            pending["entry_at"] = entry.at
+        else:
+            return
+        self.learning["last_override"] = {**entry.to_dict(), "raw_magnitude": net, "steps": pending["steps"]}
+
+    def _arm_coalesce_timer(self) -> None:
+        self._cancel_coalesce_timer()
+        self._coalesce_timer = async_call_later(self.hass, float(self.const("override_coalesce_s")), self._on_coalesce_settled)
+
+    def _cancel_coalesce_timer(self) -> None:
+        if self._coalesce_timer is not None:
+            self._coalesce_timer()
+            self._coalesce_timer = None
+
+    @callback
+    def _on_coalesce_settled(self, _now) -> None:
+        self._coalesce_timer = None
+        pending, self._coalesce = self._coalesce, None
+        if pending is None or pending["steps"] < 2:
+            return
+        net = (pending["to"] - pending["from"]) if pending.get("to") is not None else 0.0
+        seconds = (pending["last_at"] - pending["first_at"]).total_seconds()
+        last = self.learning.get("last_override") if pending.get("entry_at") is not None else None
+        said = f" -> {last['bucket']}" if last else " (not learnt)"
+        self._diagnostic(
+            "override",
+            f"Override settled: {pending['kind']} {'+' if net > 0 else '-'}{abs(net):.1f} C{said} "
+            f"({pending['steps']} steps over {seconds:.0f} s)",
+        )
+        self._schedule_save()
 
     def _capture_override_undo(self, now: datetime) -> None:
         """Remember what an external change is about to alter, so a Scheduler slot that turns out to have caused it
@@ -324,6 +462,9 @@ class LearningMixin:
             skip_after_window_min=float(self.const("skip_ended_learning_window_min")),
         )
         self._add_ledger_entry(now, ctx, direction, magnitude, bucket, weight, kind, old_preset, raw_magnitude=magnitude)
+        if self._coalesce is not None and self._coalesce["first_at"] == now:
+            # D67: later steps of the same change amend this entry
+            self._coalesce.update({"entry_at": now, "ctx": ctx, "template": self.ledger.entries[-1]})
 
     def _override_context(self, now: datetime, active_preset: str | None) -> OverrideContext:
         last_q = self.ledger.last_entry_at()

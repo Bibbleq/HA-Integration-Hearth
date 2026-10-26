@@ -259,6 +259,31 @@ class BucketStats:
         self.events += 1
         self.last_at = now
 
+    def remove(self, correction: float, weight: float = 1.0) -> None:
+        """Take back the newest update exactly (D67). The stats stay expressed as of `last_at`, which does not move."""
+        remaining = self.weight - weight
+        if remaining <= 1e-9:
+            self.mean, self.weight = 0.0, 0.0
+        else:
+            self.mean = (self.mean * self.weight - correction * weight) / remaining
+            self.weight = remaining
+        if correction > 0:
+            self.pos = max(0.0, self.pos - weight)
+        elif correction < 0:
+            self.neg = max(0.0, self.neg - weight)
+        self.events = max(0, self.events - 1)
+
+    def readd(self, correction: float, weight: float = 1.0) -> None:
+        """Put an update back at the time the stats are already expressed as (no decay, `last_at` unchanged)."""
+        new_weight = self.weight + weight
+        self.mean = (self.mean * self.weight + correction * weight) / new_weight if new_weight > 0 else 0.0
+        self.weight = new_weight
+        if correction > 0:
+            self.pos += weight
+        elif correction < 0:
+            self.neg += weight
+        self.events += 1
+
     def evidence(self, now: datetime, half_life: timedelta) -> float:
         """Decayed same-direction evidence as of `now` (does not mutate)."""
         if self.last_at is None:
@@ -316,6 +341,27 @@ class Ledger:
         self.entries.append(entry)
         del self.entries[: -self.max_entries]
         self.buckets.setdefault(entry.bucket, BucketStats()).update(entry.direction * entry.magnitude, entry.at, half_life, entry.weight)
+
+    def amend_last(self, entry: LedgerEntry | None, half_life: timedelta) -> LedgerEntry | None:
+        """Replace the newest entry with `entry` (None removes it), keeping the bucket statistics exact (D67).
+
+        The replacement keeps the original timestamp, so in the same bucket it goes back without decay; a different
+        bucket sees the event for the first time and decays as usual. Returns the entry removed, or None.
+        """
+        if not self.entries:
+            return None
+        old = self.entries.pop()
+        self.buckets.setdefault(old.bucket, BucketStats()).remove(old.direction * old.magnitude, old.weight)
+        if entry is None:
+            return old
+        self.entries.append(entry)
+        if entry.bucket == old.bucket:
+            self.buckets[old.bucket].readd(entry.direction * entry.magnitude, entry.weight)
+        else:
+            self.buckets.setdefault(entry.bucket, BucketStats()).update(
+                entry.direction * entry.magnitude, entry.at, half_life, entry.weight
+            )
+        return old
 
     def reset(self, bucket: str | None = None) -> None:
         if bucket is None:

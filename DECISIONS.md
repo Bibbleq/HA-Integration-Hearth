@@ -181,7 +181,8 @@ block start or preheat start, with the 5 min tick as a safety net.
 The next warm-by block within `preheat_lookahead_hours` (12) gets a plan: target = that preset's VTherm
 number (minus `solar_gain_discount` on sunny mornings for solar rooms), deficit from the current indoor
 temperature, outdoor from the hourly forecast an hour before warm-by (else the current reading), rate from
-the learned model (or 1.0 C/h until five clean runs), lead capped at `max_preheat_min`. When now passes the
+the learned model (D68: 1.0 C/h with fewer than two clean runs, the median of the runs until five, then the fit),
+lead capped at `max_preheat_min`. When now passes the
 planned start, the block's preset is applied early. Preheat requires the schedule switch; the plan and
 estimate are always visible in `sensor.<room>_next_block` attributes, the state string only shows
 "preheat est." when preheat is enabled.
@@ -741,3 +742,57 @@ The slope_error bucket still means what it did: overrides while the running mean
 residual on top of a warmer cold-weather comfort rather than the inverted slope; no room had slope_error evidence when
 the sign changed, so nothing learnt under the old sign carries over.
 
+## D66. A VTherm blinking is not the house letting go of the room
+
+On 25 Oct at 18:46 a central-configuration change reloaded every VTherm while the Main Bedroom was preheating. The
+VTherm went `unavailable`, then `off` with `is_ready` false, then came back on comfort. `unavailable` is a dormant
+reason, dormancy other than a window ended the preheat latch (D62), and when the VTherm came back Hearth applied the
+current block: an eco write 16 ms after the restore. VTherm's own start-up then put comfort back 0.9 s later, with no
+user and outside D55's not-ready rule, so Hearth read it as an automation's preset change and stood the room down until
+the 20:15 block. The heating run was discarded as `unavailable` as well.
+
+Two changes. `unavailable`, and a VTherm reporting `is_ready` false (now the same dormant reason), are transient
+(`DORMANT_TRANSIENT`): the preheat latch holds through them (nothing is written while they last, as before) and a
+heating run in progress waits rather than dying. Every other dormancy (away, central frost, safety, overpowering, off,
+disabled, paused, no preset entities) still ends the latch and taints the run. And for `reload_grace_s` (60) after a
+VTherm comes back from unavailable or not ready, a change without a person's context is its restore (D55's `startup`
+reason), with Hearth's current block put back afterwards as before; a person's change in that window still counts.
+D55's "a reload on a running system gets no time window" is superseded: it gets this one.
+
+## D67. A person's stepped change is one override
+
+On 26 Oct at 09:22 the Office was turned down from 21 to 19 by dragging a thermostat slider: 21 target writes in 0.1 C
+steps over six seconds, each with the person's context. The first step was recorded as a -0.1 C `baseline_error`, the
+other twenty were excluded as a storm, and each restarted the stand-down: 21 "Standing down until 12:22" log lines, 21
+stand-down state writes, and a ledger that said -0.1 where the person said -2.0. The storm rule exists to stop two
+separate changes an hour apart counting twice; it was never meant for one change arriving in pieces.
+
+A person's target change (`temp`, or a manual `setpoint` that drops the preset to none) opens a pending override. A
+further target change by a person within `override_coalesce_s` (15) of the previous step is folded into it rather than
+judged on its own: the ledger entry the first step made is amended to the net change from the first step's starting
+target (bucket and direction re-attributed from the same context), `last_external_change` carries the whole change with
+a step count, the stand-down the first step started is left alone, and `last_override` shows the net with `steps`. A
+drag back to where it started removes the entry (nothing was said); one that carries on past the start puts it back. If
+the first step was not learnt (settling, a storm, learning off) the later steps are not either, but they no longer
+restart the stand-down. When the steps stop, one summary line is logged ("Override settled: temp -2.0 C ->
+baseline_error (20 steps over 6 s)") and the room is saved. A preset tap is still judged on its own and ends any
+pending change. Amending keeps the bucket statistics exact: the replacement carries the original timestamp, so in the
+same bucket it goes back without further decay; a different bucket sees the event for the first time.
+
+Also found here: a person dragging the target back onto the preset's own temperature matched D58's "VTherm reapplying
+its preset temperature" and was ignored. D58 now applies only to changes with no user behind them.
+
+## D68. The warming rate uses the evidence it has
+
+Preheat lead came from a two-parameter fit of rate against indoor-outdoor delta, trusted only from
+`min_learning_runs` (5) clean runs; until then a flat 1.0 C/h. The gate was right about the fit (the Main Bedroom's
+four-run fit read 36 - 2.85 x delta, negative at a delta of 13) and wrong about the evidence: on 26 Oct the three live
+rooms each had two to four runs of 1.2 to 2.6 C/h, all preheated on the 120-minute cap, all reached comfort an hour
+early, and the boiler ran from 04:50 to 08:00 with the Living Room tripping the running-long alert.
+
+From `early_rate_min_runs` (2) clean runs the median of the observed rates is used, flat, until the fit takes over at
+`min_learning_runs`. One run alone still falls back to the default (the Living Room's first-ever run read 7 C/h off
+the radiator). The median rather than the mean, so one wild run moves nothing. The same rule applies when the outdoor
+temperature is missing: the fit needs it, the median does not. `sensor.hearth_<room>_warming_rate` shows the rate in use
+with `basis`: `fit`, `median` or `default`, plus `early_min_runs`. On the day: Living Room 1.47 (105 min for 2.2 C
+instead of 120), Office 1.80 (90 min for 2.4 C), Main Bedroom 1.32 (unchanged at the cap for 2.5 C).

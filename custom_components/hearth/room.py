@@ -305,6 +305,7 @@ class HearthRoom(SchedulerSourceMixin, TransferMixin, LearningMixin, ScheduleMix
             unsub()
         self._unsubs.clear()
         self._stop_schedule_timer()
+        self._cancel_coalesce_timer()
         await self.async_source_unload()
         await self._store.async_save(self._data_to_save())
 
