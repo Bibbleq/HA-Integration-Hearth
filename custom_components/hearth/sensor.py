@@ -181,12 +181,16 @@ def _warming_rate_attrs(room: HearthRoom) -> dict[str, Any]:
     model = room.warming_model
     rate, learned = room.current_warming_rate()
     run = room.heating_run
+    min_runs = int(room.const("min_learning_runs"))
     return {
         "learned": learned,
+        # D68: "fit" = the delta-aware model (min_runs or more), "median" = the observed rates alone, "default" = 1.0 C/h
+        "basis": ("fit" if model.n_runs >= min_runs else "median") if learned else "default",
         "a": model.a,
         "b": model.b,
         "evidence_count": model.n_runs,
         "min_runs": room.const("min_learning_runs"),
+        "early_min_runs": room.const("early_rate_min_runs"),
         "default_rate": room.const("default_rate"),
         "rate_min": room.const("rate_min"),
         "rate_max": room.const("rate_max"),

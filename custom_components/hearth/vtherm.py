@@ -45,6 +45,7 @@ from .const import (
     VT_ATTR_OVERPOWERING_STATE,
     VT_ATTR_PRESENCE_STATE,
     VT_ATTR_PRESET,
+    VT_ATTR_READY,
     VT_ATTR_SAFETY_STATE,
     VT_ATTR_SLOPE,
     VT_ATTR_TARGET_TEMP,
@@ -100,6 +101,7 @@ class VThermSnapshot:
     overpowering: bool
     away: bool
     central_mode: str | None = None
+    ready: bool = True  # VTherm `is_ready`: False while it initialises after a reload or restart (D66)
 
     @property
     def heating(self) -> bool:
@@ -108,7 +110,7 @@ class VThermSnapshot:
     @property
     def dormant_reason(self) -> str | None:
         """Why Hearth must leave this room alone, or None when it is in scope (spec 2, 5)."""
-        if not self.available:
+        if not self.available or not self.ready:
             return DORMANT_UNAVAILABLE
         if self.hvac_mode == HVACMode.OFF or self.hvac_mode is None:
             return DORMANT_OFF
@@ -153,6 +155,7 @@ def snapshot_from_state(state: State | None) -> VThermSnapshot:
         overpowering=overpowering_state == STATE_ON,
         away=presence_state in (STATE_OFF, STATE_NOT_HOME),
         central_mode=_nested(a, VT_SPECIFIC_STATES, VT_ATTR_CENTRAL_MODE),
+        ready=a.get(VT_ATTR_READY) is not False,
     )
 
 
